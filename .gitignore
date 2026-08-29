@@ -23,10 +23,11 @@ cmake_install.cmake
 CTestTestfile.cmake
 Testing/
 
-# IDE
+# IDE / agent tooling
 .vs/
 .vscode/
 .idea/
+.claude/
 
 # OS
 .DS_Store

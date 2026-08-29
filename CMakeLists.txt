@@ -26,11 +26,15 @@ add_library(forge_core STATIC
   src/core/object_encoding.cpp
   src/core/tree.cpp
   src/core/tree_builder.cpp
+  src/core/ignore_rules.cpp
+  src/core/index.cpp
+  src/core/staging.cpp
   src/cli/cli.cpp
   src/storage/safe_path.cpp
   src/storage/atomic_file.cpp
   src/storage/repository.cpp
   src/storage/object_store.cpp
+  src/storage/index_store.cpp
 )
 target_include_directories(forge_core PUBLIC src)
 target_link_libraries(forge_core PRIVATE OpenSSL::Crypto)

@@ -6,16 +6,19 @@
 
 namespace forge::cli {
 
-enum class Command { Help, Version, Init, Unknown };
+enum class Command { Help, Version, Init, Add, Unknown };
 
 struct ParseResult {
-    Command command;
+    Command command = Command::Help;
     // Populated only when command == Unknown, so callers can report
     // exactly what the user typed.
     std::string unrecognized;
     // Populated only when command == Init; defaults to the current
     // directory, matching `forge init [path]`.
     std::string init_target = ".";
+    // Populated only when command == Add; empty means "no pathspec was
+    // given", a usage error `run()` reports rather than parse_args.
+    std::string add_target;
 };
 
 // Pure and side-effect free so it is easy to unit test independently of

@@ -20,6 +20,9 @@ endfunction()
 add_library(forge_core STATIC
   src/core/logging.cpp
   src/cli/cli.cpp
+  src/storage/safe_path.cpp
+  src/storage/atomic_file.cpp
+  src/storage/repository.cpp
 )
 target_include_directories(forge_core PUBLIC src)
 forge_apply_warnings(forge_core)

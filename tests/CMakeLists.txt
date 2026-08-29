@@ -5,6 +5,9 @@ add_executable(forge_unit_tests
   unit/safe_path_tests.cpp
   unit/atomic_file_tests.cpp
   unit/repository_tests.cpp
+  unit/hashing_tests.cpp
+  unit/object_id_tests.cpp
+  unit/object_encoding_tests.cpp
 )
 target_include_directories(forge_unit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(forge_unit_tests PRIVATE forge_core)

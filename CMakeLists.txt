@@ -27,3 +27,6 @@ forge_apply_warnings(forge_core)
 add_executable(forge src/main.cpp)
 target_link_libraries(forge PRIVATE forge_core)
 forge_apply_warnings(forge)
+
+enable_testing()
+add_subdirectory(tests)

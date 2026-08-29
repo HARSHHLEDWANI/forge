@@ -28,6 +28,7 @@ add_library(forge_core STATIC
   src/storage/safe_path.cpp
   src/storage/atomic_file.cpp
   src/storage/repository.cpp
+  src/storage/object_store.cpp
 )
 target_include_directories(forge_core PUBLIC src)
 target_link_libraries(forge_core PRIVATE OpenSSL::Crypto)

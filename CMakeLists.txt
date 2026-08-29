@@ -17,14 +17,20 @@ function(forge_apply_warnings target)
   endif()
 endfunction()
 
+find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+
 add_library(forge_core STATIC
   src/core/logging.cpp
+  src/core/hashing.cpp
+  src/core/object_id.cpp
+  src/core/object_encoding.cpp
   src/cli/cli.cpp
   src/storage/safe_path.cpp
   src/storage/atomic_file.cpp
   src/storage/repository.cpp
 )
 target_include_directories(forge_core PUBLIC src)
+target_link_libraries(forge_core PRIVATE OpenSSL::Crypto)
 forge_apply_warnings(forge_core)
 
 add_executable(forge src/main.cpp)

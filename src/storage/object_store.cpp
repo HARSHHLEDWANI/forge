@@ -70,4 +70,20 @@ core::Blob ObjectStore::get_blob(const core::ObjectId& id) const {
     return core::Blob{stored.payload};
 }
 
+core::ObjectId ObjectStore::put_tree(const core::Tree& tree) {
+    return put("tree", tree.encode());
+}
+
+core::Tree ObjectStore::get_tree(const core::ObjectId& id) const {
+    const StoredObject stored = get(id);
+    if (stored.type != "tree") {
+        throw core::ForgeError("object is not a tree: " + id.to_hex());
+    }
+    const std::optional<core::Tree> decoded = core::decode_tree(stored.payload);
+    if (!decoded) {
+        throw core::ForgeError("tree object malformed: " + id.to_hex());
+    }
+    return *decoded;
+}
+
 } // namespace forge::storage

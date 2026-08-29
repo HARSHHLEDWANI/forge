@@ -24,6 +24,8 @@ add_library(forge_core STATIC
   src/core/hashing.cpp
   src/core/object_id.cpp
   src/core/object_encoding.cpp
+  src/core/tree.cpp
+  src/core/tree_builder.cpp
   src/cli/cli.cpp
   src/storage/safe_path.cpp
   src/storage/atomic_file.cpp

@@ -6,6 +6,7 @@
 
 #include "core/blob.hpp"
 #include "core/object_id.hpp"
+#include "core/tree.hpp"
 
 namespace forge::storage {
 
@@ -46,6 +47,12 @@ public:
     // a non-blob object as a blob, which raw get() cannot.
     core::ObjectId put_blob(const core::Blob& blob);
     core::Blob get_blob(const core::ObjectId& id) const;
+
+    // Tree-typed convenience: rejects fetching a non-tree object as a
+    // tree, and surfaces a malformed tree payload as ForgeError instead
+    // of leaving decode_tree's nullopt for the caller to handle.
+    core::ObjectId put_tree(const core::Tree& tree);
+    core::Tree get_tree(const core::ObjectId& id) const;
 
 private:
     std::filesystem::path root_;

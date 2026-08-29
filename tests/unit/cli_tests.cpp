@@ -1,4 +1,5 @@
 #include <filesystem>
+#include <fstream>
 #include <sstream>
 #include <string>
 
@@ -98,4 +99,70 @@ FORGE_TEST_CASE(run_init_twice_reports_reinitialized) {
     const int code = run({"init", dir.path().string()}, out2, err2);
     FORGE_CHECK(code == 0);
     FORGE_CHECK(out2.str().find("Reinitialized existing Forge repository") != std::string::npos);
+}
+
+namespace {
+
+// `add` resolves its pathspec (and discovers the repository) relative to
+// the process's current directory, like a real CLI. This guard lets
+// tests change it temporarily without leaking state into whichever test
+// happens to run next in this shared-process test binary.
+struct CwdGuard {
+    std::filesystem::path original = std::filesystem::current_path();
+    ~CwdGuard() { std::filesystem::current_path(original); }
+};
+
+} // namespace
+
+FORGE_TEST_CASE(parse_args_add_requires_explicit_target) {
+    const auto result = parse_args({"add"});
+    FORGE_CHECK(result.command == Command::Add);
+    FORGE_CHECK(result.add_target.empty());
+}
+
+FORGE_TEST_CASE(parse_args_add_accepts_target) {
+    const auto result = parse_args({"add", "."});
+    FORGE_CHECK(result.command == Command::Add);
+    FORGE_CHECK(result.add_target == ".");
+}
+
+FORGE_TEST_CASE(run_add_with_no_target_is_a_usage_error) {
+    std::ostringstream out;
+    std::ostringstream err;
+    const int code = run({"add"}, out, err);
+    FORGE_CHECK(code != 0);
+    FORGE_CHECK(err.str().find("nothing added") != std::string::npos);
+}
+
+FORGE_TEST_CASE(run_add_outside_a_repository_fails) {
+    TempDir dir;
+    CwdGuard guard;
+    std::filesystem::current_path(dir.path());
+
+    std::ostringstream out;
+    std::ostringstream err;
+    const int code = run({"add", "."}, out, err);
+    FORGE_CHECK(code != 0);
+    FORGE_CHECK(err.str().find("not a forge repository") != std::string::npos);
+}
+
+FORGE_TEST_CASE(run_add_dot_stages_working_tree) {
+    TempDir dir;
+    CwdGuard guard;
+    std::filesystem::current_path(dir.path());
+
+    std::ostringstream init_out;
+    std::ostringstream init_err;
+    run({"init"}, init_out, init_err);
+    {
+        std::ofstream file("tracked.txt", std::ios::binary);
+        file << "content";
+    }
+
+    std::ostringstream out;
+    std::ostringstream err;
+    const int code = run({"add", "."}, out, err);
+    FORGE_CHECK(code == 0);
+    FORGE_CHECK(out.str().find("add 'tracked.txt'") != std::string::npos);
+    FORGE_CHECK(err.str().empty());
 }

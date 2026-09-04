@@ -432,3 +432,88 @@ FORGE_TEST_CASE(run_checkout_detaches_head_at_a_commit) {
     run({"branch"}, branch_out, branch_err);
     FORGE_CHECK(branch_out.str().find("* main") == std::string::npos); // detached: no branch marked current
 }
+
+FORGE_TEST_CASE(run_status_on_clean_repo_reports_clean) {
+    TempDir dir;
+    CwdGuard guard;
+    std::filesystem::current_path(dir.path());
+    run({"init"}, out_sink(), out_sink());
+    configure_author(dir.path());
+    std::ofstream("a.txt", std::ios::binary) << "content";
+    run({"add", "."}, out_sink(), out_sink());
+    run({"commit", "-m", "first"}, out_sink(), out_sink());
+
+    std::ostringstream out;
+    std::ostringstream err;
+    const int code = run({"status"}, out, err);
+    FORGE_CHECK(code == 0);
+    FORGE_CHECK(out.str().find("On branch main") != std::string::npos);
+    FORGE_CHECK(out.str().find("nothing to commit, working tree clean") != std::string::npos);
+}
+
+FORGE_TEST_CASE(run_status_reports_staged_unstaged_and_untracked) {
+    TempDir dir;
+    CwdGuard guard;
+    std::filesystem::current_path(dir.path());
+    run({"init"}, out_sink(), out_sink());
+    configure_author(dir.path());
+    std::ofstream("a.txt", std::ios::binary) << "v1";
+    std::ofstream("b.txt", std::ios::binary) << "v1";
+    run({"add", "."}, out_sink(), out_sink());
+    run({"commit", "-m", "first"}, out_sink(), out_sink());
+
+    std::ofstream("a.txt", std::ios::binary) << "staged edit";
+    run({"add", "a.txt"}, out_sink(), out_sink());
+    std::ofstream("b.txt", std::ios::binary) << "unstaged edit";
+    std::ofstream("c.txt", std::ios::binary) << "new";
+
+    std::ostringstream out;
+    std::ostringstream err;
+    const int code = run({"status"}, out, err);
+    FORGE_CHECK(code == 0);
+    FORGE_CHECK(out.str().find("Changes to be committed:") != std::string::npos);
+    FORGE_CHECK(out.str().find("modified:   a.txt") != std::string::npos);
+    FORGE_CHECK(out.str().find("Changes not staged for commit:") != std::string::npos);
+    FORGE_CHECK(out.str().find("modified:   b.txt") != std::string::npos);
+    FORGE_CHECK(out.str().find("Untracked files:") != std::string::npos);
+    FORGE_CHECK(out.str().find("c.txt") != std::string::npos);
+}
+
+FORGE_TEST_CASE(run_diff_shows_unstaged_line_changes) {
+    TempDir dir;
+    CwdGuard guard;
+    std::filesystem::current_path(dir.path());
+    run({"init"}, out_sink(), out_sink());
+    configure_author(dir.path());
+    std::ofstream("a.txt", std::ios::binary) << "line one\nline two\n";
+    run({"add", "."}, out_sink(), out_sink());
+    run({"commit", "-m", "first"}, out_sink(), out_sink());
+
+    std::ofstream("a.txt", std::ios::binary) << "line one\nline changed\n";
+
+    std::ostringstream out;
+    std::ostringstream err;
+    const int code = run({"diff"}, out, err);
+    FORGE_CHECK(code == 0);
+    FORGE_CHECK(out.str().find("--- a/a.txt") != std::string::npos);
+    FORGE_CHECK(out.str().find("-line two") != std::string::npos);
+    FORGE_CHECK(out.str().find("+line changed") != std::string::npos);
+}
+
+FORGE_TEST_CASE(run_diff_excludes_untracked_files) {
+    TempDir dir;
+    CwdGuard guard;
+    std::filesystem::current_path(dir.path());
+    run({"init"}, out_sink(), out_sink());
+    configure_author(dir.path());
+    std::ofstream("a.txt", std::ios::binary) << "content";
+    run({"add", "."}, out_sink(), out_sink());
+    run({"commit", "-m", "first"}, out_sink(), out_sink());
+    std::ofstream("untracked.txt", std::ios::binary) << "new";
+
+    std::ostringstream out;
+    std::ostringstream err;
+    const int code = run({"diff"}, out, err);
+    FORGE_CHECK(code == 0);
+    FORGE_CHECK(out.str().empty());
+}

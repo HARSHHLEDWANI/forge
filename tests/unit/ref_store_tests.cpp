@@ -109,6 +109,19 @@ FORGE_TEST_CASE(set_head_branch_changes_which_branch_head_tracks) {
     FORGE_CHECK(fixture.refs.resolve_head() == ObjectId::of("commit-1"));
 }
 
+FORGE_TEST_CASE(set_head_detached_makes_head_report_no_branch) {
+    RefStoreFixture fixture;
+    forge::storage::initialize_repository(fixture.dir.path());
+    const ObjectId commit_id = ObjectId::of("commit-1");
+
+    fixture.refs.set_head_detached(commit_id);
+
+    const RefStore::Head head = fixture.refs.read_head();
+    FORGE_CHECK(!head.branch.has_value());
+    FORGE_CHECK(head.detached_commit == commit_id);
+    FORGE_CHECK(fixture.refs.resolve_head() == commit_id);
+}
+
 FORGE_TEST_CASE(branch_path_rejects_path_traversal_in_branch_name) {
     RefStoreFixture fixture;
     bool threw = false;

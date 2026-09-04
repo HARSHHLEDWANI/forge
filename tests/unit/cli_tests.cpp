@@ -338,3 +338,97 @@ FORGE_TEST_CASE(run_branch_with_name_creates_new_branch) {
     FORGE_CHECK(list_out.str().find("  feature") != std::string::npos);
     FORGE_CHECK(list_out.str().find("* main") != std::string::npos);
 }
+
+FORGE_TEST_CASE(run_switch_without_target_is_a_usage_error) {
+    std::ostringstream out;
+    std::ostringstream err;
+    const int code = run({"switch"}, out, err);
+    FORGE_CHECK(code != 0);
+    FORGE_CHECK(err.str().find("branch name required") != std::string::npos);
+}
+
+FORGE_TEST_CASE(run_switch_to_unknown_branch_fails) {
+    TempDir dir;
+    CwdGuard guard;
+    std::filesystem::current_path(dir.path());
+    run({"init"}, out_sink(), out_sink());
+
+    std::ostringstream out;
+    std::ostringstream err;
+    const int code = run({"switch", "nope"}, out, err);
+    FORGE_CHECK(code != 0);
+    FORGE_CHECK(err.str().find("no such branch") != std::string::npos);
+}
+
+FORGE_TEST_CASE(run_switch_moves_head_and_working_tree) {
+    TempDir dir;
+    CwdGuard guard;
+    std::filesystem::current_path(dir.path());
+    run({"init"}, out_sink(), out_sink());
+    configure_author(dir.path());
+    std::ofstream("a.txt", std::ios::binary) << "on main";
+    run({"add", "."}, out_sink(), out_sink());
+    run({"commit", "-m", "main commit"}, out_sink(), out_sink());
+    run({"branch", "feature"}, out_sink(), out_sink());
+
+    std::ostringstream out;
+    std::ostringstream err;
+    const int code = run({"switch", "feature"}, out, err);
+    FORGE_CHECK(code == 0);
+    FORGE_CHECK(out.str().find("Switched to branch 'feature'") != std::string::npos);
+
+    std::ostringstream branch_out;
+    std::ostringstream branch_err;
+    run({"branch"}, branch_out, branch_err);
+    FORGE_CHECK(branch_out.str().find("* feature") != std::string::npos);
+}
+
+FORGE_TEST_CASE(run_checkout_without_target_is_a_usage_error) {
+    std::ostringstream out;
+    std::ostringstream err;
+    const int code = run({"checkout"}, out, err);
+    FORGE_CHECK(code != 0);
+    FORGE_CHECK(err.str().find("a branch or commit is required") != std::string::npos);
+}
+
+FORGE_TEST_CASE(run_checkout_unknown_revision_fails) {
+    TempDir dir;
+    CwdGuard guard;
+    std::filesystem::current_path(dir.path());
+    run({"init"}, out_sink(), out_sink());
+
+    std::ostringstream out;
+    std::ostringstream err;
+    const int code = run({"checkout", "nope"}, out, err);
+    FORGE_CHECK(code != 0);
+    FORGE_CHECK(err.str().find("unknown revision or branch") != std::string::npos);
+}
+
+FORGE_TEST_CASE(run_checkout_detaches_head_at_a_commit) {
+    TempDir dir;
+    CwdGuard guard;
+    std::filesystem::current_path(dir.path());
+    run({"init"}, out_sink(), out_sink());
+    configure_author(dir.path());
+    std::ofstream("a.txt", std::ios::binary) << "content";
+    run({"add", "."}, out_sink(), out_sink());
+    run({"commit", "-m", "first"}, out_sink(), out_sink());
+
+    std::ostringstream log_out;
+    std::ostringstream log_err;
+    run({"log"}, log_out, log_err);
+    // "commit <64-hex-chars>\n..."
+    const std::string log_output = log_out.str();
+    const std::string full_hash = log_output.substr(7, 64);
+
+    std::ostringstream out;
+    std::ostringstream err;
+    const int code = run({"checkout", full_hash}, out, err);
+    FORGE_CHECK(code == 0);
+    FORGE_CHECK(out.str().find("HEAD is now at") != std::string::npos);
+
+    std::ostringstream branch_out;
+    std::ostringstream branch_err;
+    run({"branch"}, branch_out, branch_err);
+    FORGE_CHECK(branch_out.str().find("* main") == std::string::npos); // detached: no branch marked current
+}

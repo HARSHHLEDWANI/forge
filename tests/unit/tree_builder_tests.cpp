@@ -11,6 +11,7 @@
 using forge::core::build_tree_from_directory;
 using forge::core::build_tree_from_index;
 using forge::core::EntryMode;
+using forge::core::flatten_tree_to_index;
 using forge::core::Index;
 using forge::core::IndexEntry;
 using forge::storage::ObjectStore;
@@ -183,4 +184,28 @@ FORGE_TEST_CASE(build_tree_from_index_on_empty_index_yields_empty_tree) {
 
     const auto root_id = build_tree_from_index(store, Index{});
     FORGE_CHECK(store.get_tree(root_id).entries().empty());
+}
+
+FORGE_TEST_CASE(flatten_tree_to_index_round_trips_build_tree_from_index) {
+    TempDir objects_dir;
+    ObjectStore store(objects_dir.path());
+    const auto blob_a = store.put_blob(forge::core::Blob{"a"});
+    const auto blob_b = store.put_blob(forge::core::Blob{"b"});
+
+    Index original;
+    original.upsert(IndexEntry{"a.txt", EntryMode::RegularFile, blob_a});
+    original.upsert(IndexEntry{"sub/b.txt", EntryMode::RegularFile, blob_b});
+
+    const auto tree_id = build_tree_from_index(store, original);
+    const Index flattened = flatten_tree_to_index(store, tree_id);
+
+    FORGE_CHECK(flattened.encode() == original.encode());
+}
+
+FORGE_TEST_CASE(flatten_tree_to_index_on_empty_tree_yields_empty_index) {
+    TempDir objects_dir;
+    ObjectStore store(objects_dir.path());
+    const auto tree_id = build_tree_from_index(store, Index{});
+
+    FORGE_CHECK(flatten_tree_to_index(store, tree_id).entries().empty());
 }

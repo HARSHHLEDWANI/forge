@@ -53,6 +53,14 @@ InitResult initialize_repository(const std::filesystem::path& target_dir) {
         write_file_atomic(config_path, config.str());
     }
 
+    // HEAD starts attached to the default branch before it even exists
+    // (an "unborn" branch) — exactly the state a fresh Git repository is
+    // in before its first commit.
+    const std::filesystem::path head_path = forge_dir / kHeadFileName;
+    if (!std::filesystem::exists(head_path)) {
+        write_file_atomic(head_path, "ref: " + std::string(kRefsHeadsDirName) + "/" + std::string(kDefaultBranchName) + "\n");
+    }
+
     return InitResult{forge_dir, reinitialized};
 }
 
@@ -109,6 +117,10 @@ RepositoryConfig load_config(const std::filesystem::path& forge_dir) {
         } else if (key == "storage_root") {
             config.storage_root = value;
             has_storage_root = true;
+        } else if (key == "author_name") {
+            config.author_name = value;
+        } else if (key == "author_email") {
+            config.author_email = value;
         }
         // Unknown keys are ignored for forward compatibility.
     }

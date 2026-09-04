@@ -6,7 +6,7 @@
 
 namespace forge::cli {
 
-enum class Command { Help, Version, Init, Add, Unknown };
+enum class Command { Help, Version, Init, Add, Commit, Log, Branch, Unknown };
 
 struct ParseResult {
     Command command = Command::Help;
@@ -19,6 +19,12 @@ struct ParseResult {
     // Populated only when command == Add; empty means "no pathspec was
     // given", a usage error `run()` reports rather than parse_args.
     std::string add_target;
+    // Populated only when command == Commit; empty means "no -m <message>
+    // was given", a usage error `run()` reports rather than parse_args.
+    std::string commit_message;
+    // Populated only when command == Branch; empty means "list branches"
+    // rather than "create one", matching `git branch` with no argument.
+    std::string branch_name;
 };
 
 // Pure and side-effect free so it is easy to unit test independently of

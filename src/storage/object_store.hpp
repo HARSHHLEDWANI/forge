@@ -5,6 +5,7 @@
 #include <string_view>
 
 #include "core/blob.hpp"
+#include "core/commit.hpp"
 #include "core/object_id.hpp"
 #include "core/tree.hpp"
 
@@ -53,6 +54,12 @@ public:
     // of leaving decode_tree's nullopt for the caller to handle.
     core::ObjectId put_tree(const core::Tree& tree);
     core::Tree get_tree(const core::ObjectId& id) const;
+
+    // Commit-typed convenience: rejects fetching a non-commit object as a
+    // commit, and surfaces a malformed commit payload as ForgeError
+    // instead of leaving decode_commit's nullopt for the caller to handle.
+    core::ObjectId put_commit(const core::Commit& commit);
+    core::Commit get_commit(const core::ObjectId& id) const;
 
 private:
     std::filesystem::path root_;

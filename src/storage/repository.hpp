@@ -10,6 +10,9 @@ inline constexpr std::string_view kForgeDirName = ".forge";
 inline constexpr std::string_view kConfigFileName = "config";
 inline constexpr std::string_view kIndexFileName = "index";
 inline constexpr std::string_view kIgnoreFileName = ".forgeignore";
+inline constexpr std::string_view kHeadFileName = "HEAD";
+inline constexpr std::string_view kRefsHeadsDirName = "refs/heads";
+inline constexpr std::string_view kDefaultBranchName = "main";
 
 struct InitResult {
     std::filesystem::path forge_dir;
@@ -19,6 +22,12 @@ struct InitResult {
 struct RepositoryConfig {
     int format_version = 1;
     std::filesystem::path storage_root;
+    // Empty means "not configured"; commit creation resolves an identity
+    // from these (or from FORGE_AUTHOR_NAME/FORGE_AUTHOR_EMAIL) itself —
+    // there's no user/account system yet (frozen-scope.md), so this is
+    // the whole identity story for V1.
+    std::string author_name;
+    std::string author_email;
 };
 
 // Walks upward from `start` looking for a `.forge` directory, the same way

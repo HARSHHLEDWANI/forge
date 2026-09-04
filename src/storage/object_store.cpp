@@ -86,4 +86,20 @@ core::Tree ObjectStore::get_tree(const core::ObjectId& id) const {
     return *decoded;
 }
 
+core::ObjectId ObjectStore::put_commit(const core::Commit& commit) {
+    return put("commit", core::encode_commit(commit));
+}
+
+core::Commit ObjectStore::get_commit(const core::ObjectId& id) const {
+    const StoredObject stored = get(id);
+    if (stored.type != "commit") {
+        throw core::ForgeError("object is not a commit: " + id.to_hex());
+    }
+    const std::optional<core::Commit> decoded = core::decode_commit(stored.payload);
+    if (!decoded) {
+        throw core::ForgeError("commit object malformed: " + id.to_hex());
+    }
+    return *decoded;
+}
+
 } // namespace forge::storage

@@ -2,6 +2,7 @@
 
 #include <filesystem>
 
+#include "core/index.hpp"
 #include "core/object_id.hpp"
 #include "storage/object_store.hpp"
 
@@ -22,5 +23,13 @@ namespace forge::core {
 // (Index/Staging) — this only ever excludes ".forge" itself.
 core::ObjectId build_tree_from_directory(
     storage::ObjectStore& store, const std::filesystem::path& directory);
+
+// Reconstructs the nested Tree hierarchy implied by a flat Index — one
+// Tree object per directory level — using the blob ids already recorded
+// in the index. Unlike build_tree_from_directory, this never touches the
+// filesystem or re-hashes anything: staging already stored each blob and
+// recorded its id, so committing only needs to organize those existing
+// ids into the right shape.
+core::ObjectId build_tree_from_index(storage::ObjectStore& store, const Index& index);
 
 } // namespace forge::core

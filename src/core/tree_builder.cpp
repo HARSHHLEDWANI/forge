@@ -1,6 +1,7 @@
 #include "core/tree_builder.hpp"
 
 #include <fstream>
+#include <map>
 #include <sstream>
 #include <vector>
 
@@ -72,6 +73,45 @@ ObjectId build_tree_from_directory(
 
     const Tree tree(std::move(entries));
     return store.put_tree(tree);
+}
+
+namespace {
+
+// One directory level's worth of not-yet-built entries: files ready to go
+// straight into a TreeEntry, and subdirectories that still need their own
+// Tree built (bottom-up) before they can become a Directory TreeEntry.
+struct DirNode {
+    std::vector<TreeEntry> files;
+    std::map<std::string, DirNode> subdirs;
+};
+
+ObjectId build_tree_from_node(storage::ObjectStore& store, DirNode& node) {
+    std::vector<TreeEntry> entries = std::move(node.files);
+    for (auto& [name, child] : node.subdirs) {
+        const ObjectId subtree_id = build_tree_from_node(store, child);
+        entries.push_back(TreeEntry{name, EntryMode::Directory, subtree_id});
+    }
+    return store.put_tree(Tree(std::move(entries)));
+}
+
+} // namespace
+
+ObjectId build_tree_from_index(storage::ObjectStore& store, const Index& index) {
+    DirNode root;
+    for (const IndexEntry& entry : index.entries()) {
+        DirNode* current = &root;
+        std::size_t start = 0;
+        while (true) {
+            const std::size_t slash = entry.path.find('/', start);
+            if (slash == std::string::npos) {
+                current->files.push_back(TreeEntry{entry.path.substr(start), entry.mode, entry.blob_id});
+                break;
+            }
+            current = &current->subdirs[entry.path.substr(start, slash - start)];
+            start = slash + 1;
+        }
+    }
+    return build_tree_from_node(store, root);
 }
 
 } // namespace forge::core

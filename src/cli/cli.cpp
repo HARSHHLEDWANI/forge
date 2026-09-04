@@ -7,6 +7,7 @@
 #include <sstream>
 
 #include "core/branching.hpp"
+#include "core/checkout.hpp"
 #include "core/commit.hpp"
 #include "core/committing.hpp"
 #include "core/error.hpp"
@@ -32,6 +33,8 @@ constexpr std::string_view kUsage =
     "  commit -m <msg> Record staged changes as a new commit\n"
     "  log             Show commit history from HEAD\n"
     "  branch [name]   List branches, or create one at HEAD\n"
+    "  switch <name>   Switch to an existing branch\n"
+    "  checkout <ref>  Switch to a branch, or detach HEAD at a commit\n"
     "  version         Print the Forge version\n"
     "  --help, -h      Show this help message\n";
 
@@ -140,6 +143,20 @@ ParseResult parse_args(const std::vector<std::string>& args) {
         result.command = Command::Branch;
         if (args.size() >= 2) {
             result.branch_name = args[1];
+        }
+        return result;
+    }
+    if (first == "switch") {
+        result.command = Command::Switch;
+        if (args.size() >= 2) {
+            result.switch_target = args[1];
+        }
+        return result;
+    }
+    if (first == "checkout") {
+        result.command = Command::Checkout;
+        if (args.size() >= 2) {
+            result.checkout_target = args[1];
         }
         return result;
     }
@@ -277,6 +294,72 @@ int run(const std::vector<std::string>& args, std::ostream& out, std::ostream& e
                 }
 
                 core::create_branch(refs, result.branch_name);
+                return 0;
+            } catch (const core::ForgeError& e) {
+                err << "forge: " << e.what() << '\n';
+                return 1;
+            }
+        }
+        case Command::Switch: {
+            if (result.switch_target.empty()) {
+                err << "forge: branch name required\n";
+                return 1;
+            }
+            try {
+                const std::optional<RepoContext> ctx = discover_repo_context(err);
+                if (!ctx) {
+                    return 1;
+                }
+                const storage::RepositoryConfig config = storage::load_config(ctx->forge_dir);
+
+                storage::ObjectStore objects(config.storage_root);
+                storage::IndexStore index_store(ctx->forge_dir / storage::kIndexFileName);
+                storage::RefStore refs(ctx->forge_dir);
+
+                const std::optional<core::CheckoutTarget> target =
+                    core::resolve_checkout_target(refs, objects, result.switch_target);
+                if (!target || target->kind != core::CheckoutTargetKind::Branch) {
+                    err << "forge: no such branch: " << result.switch_target << '\n';
+                    return 1;
+                }
+
+                core::checkout(objects, index_store, refs, ctx->repo_root, *target);
+                out << "Switched to branch '" << result.switch_target << "'\n";
+                return 0;
+            } catch (const core::ForgeError& e) {
+                err << "forge: " << e.what() << '\n';
+                return 1;
+            }
+        }
+        case Command::Checkout: {
+            if (result.checkout_target.empty()) {
+                err << "forge: a branch or commit is required\n";
+                return 1;
+            }
+            try {
+                const std::optional<RepoContext> ctx = discover_repo_context(err);
+                if (!ctx) {
+                    return 1;
+                }
+                const storage::RepositoryConfig config = storage::load_config(ctx->forge_dir);
+
+                storage::ObjectStore objects(config.storage_root);
+                storage::IndexStore index_store(ctx->forge_dir / storage::kIndexFileName);
+                storage::RefStore refs(ctx->forge_dir);
+
+                const std::optional<core::CheckoutTarget> target =
+                    core::resolve_checkout_target(refs, objects, result.checkout_target);
+                if (!target) {
+                    err << "forge: unknown revision or branch: " << result.checkout_target << '\n';
+                    return 1;
+                }
+
+                core::checkout(objects, index_store, refs, ctx->repo_root, *target);
+                if (target->kind == core::CheckoutTargetKind::Branch) {
+                    out << "Switched to branch '" << result.checkout_target << "'\n";
+                } else {
+                    out << "HEAD is now at " << target->commit_id.to_hex().substr(0, 12) << '\n';
+                }
                 return 0;
             } catch (const core::ForgeError& e) {
                 err << "forge: " << e.what() << '\n';

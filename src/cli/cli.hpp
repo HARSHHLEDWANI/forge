@@ -6,7 +6,7 @@
 
 namespace forge::cli {
 
-enum class Command { Help, Version, Init, Add, Commit, Log, Branch, Unknown };
+enum class Command { Help, Version, Init, Add, Commit, Log, Branch, Switch, Checkout, Unknown };
 
 struct ParseResult {
     Command command = Command::Help;
@@ -25,6 +25,10 @@ struct ParseResult {
     // Populated only when command == Branch; empty means "list branches"
     // rather than "create one", matching `git branch` with no argument.
     std::string branch_name;
+    // Populated only when command == Switch; empty is a usage error.
+    std::string switch_target;
+    // Populated only when command == Checkout; empty is a usage error.
+    std::string checkout_target;
 };
 
 // Pure and side-effect free so it is easy to unit test independently of

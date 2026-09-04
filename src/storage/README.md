@@ -15,7 +15,9 @@ logic itself.
   ObjectStore per architecture.md).
 - `ref_store` — mutable branch pointers under `.forge/refs/heads/` plus
   `.forge/HEAD`; the RefStore bullet from architecture.md. Ref updates
-  are compare-and-swap (ADR 0003), not blind overwrites.
+  are compare-and-swap (ADR 0003), not blind overwrites. HEAD can be
+  attached to a branch (`set_head_branch`) or, since Phase 7, detached
+  at a raw commit (`set_head_detached`).
 - `repository` also now owns `RepositoryConfig`/`load_config` (the
   first real reader of the `storage_root` config key `init` has
   written since Phase 1, plus the optional `author_name`/`author_email`

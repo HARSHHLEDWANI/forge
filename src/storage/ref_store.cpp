@@ -124,6 +124,10 @@ void RefStore::set_head_branch(std::string_view branch_name) {
         head_path(), "ref: " + std::string(kRefsHeadsDirName) + "/" + std::string(branch_name) + "\n");
 }
 
+void RefStore::set_head_detached(core::ObjectId commit_id) {
+    write_file_atomic(head_path(), commit_id.to_hex() + "\n");
+}
+
 std::optional<core::ObjectId> RefStore::resolve_head() const {
     const Head head = read_head();
     if (head.detached_commit) {

@@ -32,4 +32,11 @@ core::ObjectId build_tree_from_directory(
 // ids into the right shape.
 core::ObjectId build_tree_from_index(storage::ObjectStore& store, const Index& index);
 
+// The inverse of build_tree_from_index: walks a Tree's subtrees
+// (reading each from `store`) and flattens them back into a single
+// Index whose entry paths are '/'-joined from the nesting. Used by
+// checkout to know exactly which paths a target commit's tree implies,
+// without touching the working directory.
+Index flatten_tree_to_index(const storage::ObjectStore& store, const core::ObjectId& tree_id);
+
 } // namespace forge::core

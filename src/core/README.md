@@ -22,3 +22,17 @@ wraps it in a `Commit`, and advances the current branch), `log`
 CLI -> Application Services -> Forge Core -> Storage Abstractions
 boundary in AGENTS.md.
 
+Checkout layer (Phase 7): `checkout` (`resolve_checkout_target` —
+branch name or raw commit hex; `checkout` — materializes a target
+commit's tree into the working directory, index, and HEAD). Uses
+`tree_builder`'s `flatten_tree_to_index` (the inverse of
+`build_tree_from_index`) to know exactly which paths a target implies
+without touching disk. Safety is per-path, matching real Git: a path
+only blocks the switch if it's actually part of what's changing
+between the old and new tree *and* the working tree has diverged from
+what's recorded for it — an unrelated dirty file rides along
+unaffected. The one deliberate simplification is coarser than Git:
+any staged-but-uncommitted change anywhere blocks the whole checkout,
+rather than being selectively carried forward, since there's no
+diff/merge machinery yet (Phase 8/9) to resolve that partially.
+

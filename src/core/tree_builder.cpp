@@ -114,4 +114,27 @@ ObjectId build_tree_from_index(storage::ObjectStore& store, const Index& index) 
     return build_tree_from_node(store, root);
 }
 
+namespace {
+
+void flatten_into(
+    const storage::ObjectStore& store, const core::ObjectId& tree_id, const std::string& prefix, Index& out) {
+    const Tree tree = store.get_tree(tree_id);
+    for (const TreeEntry& entry : tree.entries()) {
+        const std::string path = prefix.empty() ? entry.name : prefix + "/" + entry.name;
+        if (entry.mode == EntryMode::Directory) {
+            flatten_into(store, entry.id, path, out);
+        } else {
+            out.upsert(IndexEntry{path, entry.mode, entry.id});
+        }
+    }
+}
+
+} // namespace
+
+Index flatten_tree_to_index(const storage::ObjectStore& store, const core::ObjectId& tree_id) {
+    Index result;
+    flatten_into(store, tree_id, "", result);
+    return result;
+}
+
 } // namespace forge::core

@@ -33,6 +33,7 @@ add_library(forge_core STATIC
   src/core/committing.cpp
   src/core/branching.cpp
   src/core/log.cpp
+  src/core/checkout.cpp
   src/cli/cli.cpp
   src/storage/safe_path.cpp
   src/storage/atomic_file.cpp

@@ -45,6 +45,7 @@ public:
     // unborn branch) is normal for a fresh repository, not corruption.
     Head read_head() const;
     void set_head_branch(std::string_view branch_name);
+    void set_head_detached(core::ObjectId commit_id);
 
     // Resolves HEAD all the way down to a commit id. nullopt means an
     // unborn branch (HEAD's target branch doesn't exist yet).

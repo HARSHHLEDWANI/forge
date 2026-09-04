@@ -1,5 +1,7 @@
 #include <fstream>
 
+#include "core/blob.hpp"
+#include "core/index.hpp"
 #include "core/tree_builder.hpp"
 #include "storage/object_store.hpp"
 #include "storage/repository.hpp"
@@ -7,7 +9,10 @@
 #include "support/test_framework.hpp"
 
 using forge::core::build_tree_from_directory;
+using forge::core::build_tree_from_index;
 using forge::core::EntryMode;
+using forge::core::Index;
+using forge::core::IndexEntry;
 using forge::storage::ObjectStore;
 using forge::test::TempDir;
 
@@ -116,4 +121,66 @@ FORGE_TEST_CASE(build_tree_from_directory_is_deterministic_across_runs) {
     const auto second_id = build_tree_from_directory(store, dir.path());
 
     FORGE_CHECK(first_id == second_id);
+}
+
+FORGE_TEST_CASE(build_tree_from_index_places_flat_entries_at_root) {
+    TempDir objects_dir;
+    ObjectStore store(objects_dir.path());
+    const auto blob_id = store.put_blob(forge::core::Blob{"content"});
+
+    Index index;
+    index.upsert(IndexEntry{"a.txt", EntryMode::RegularFile, blob_id});
+
+    const auto root_id = build_tree_from_index(store, index);
+    const auto root = store.get_tree(root_id);
+    FORGE_CHECK(root.entries().size() == 1);
+    FORGE_CHECK(root.entries().at(0).name == "a.txt");
+    FORGE_CHECK(root.entries().at(0).mode == EntryMode::RegularFile);
+    FORGE_CHECK(root.entries().at(0).id == blob_id);
+}
+
+FORGE_TEST_CASE(build_tree_from_index_nests_entries_by_path) {
+    TempDir objects_dir;
+    ObjectStore store(objects_dir.path());
+    const auto blob_id = store.put_blob(forge::core::Blob{"nested"});
+
+    Index index;
+    index.upsert(IndexEntry{"sub/nested.txt", EntryMode::RegularFile, blob_id});
+
+    const auto root_id = build_tree_from_index(store, index);
+    const auto root = store.get_tree(root_id);
+    FORGE_CHECK(root.entries().size() == 1);
+    FORGE_CHECK(root.entries().at(0).name == "sub");
+    FORGE_CHECK(root.entries().at(0).mode == EntryMode::Directory);
+
+    const auto subtree = store.get_tree(root.entries().at(0).id);
+    FORGE_CHECK(subtree.entries().size() == 1);
+    FORGE_CHECK(subtree.entries().at(0).name == "nested.txt");
+    FORGE_CHECK(subtree.entries().at(0).id == blob_id);
+}
+
+FORGE_TEST_CASE(build_tree_from_index_groups_siblings_under_shared_directory) {
+    TempDir objects_dir;
+    ObjectStore store(objects_dir.path());
+    const auto blob_a = store.put_blob(forge::core::Blob{"a"});
+    const auto blob_b = store.put_blob(forge::core::Blob{"b"});
+
+    Index index;
+    index.upsert(IndexEntry{"sub/a.txt", EntryMode::RegularFile, blob_a});
+    index.upsert(IndexEntry{"sub/b.txt", EntryMode::RegularFile, blob_b});
+
+    const auto root_id = build_tree_from_index(store, index);
+    const auto root = store.get_tree(root_id);
+    FORGE_CHECK(root.entries().size() == 1);
+
+    const auto subtree = store.get_tree(root.entries().at(0).id);
+    FORGE_CHECK(subtree.entries().size() == 2);
+}
+
+FORGE_TEST_CASE(build_tree_from_index_on_empty_index_yields_empty_tree) {
+    TempDir objects_dir;
+    ObjectStore store(objects_dir.path());
+
+    const auto root_id = build_tree_from_index(store, Index{});
+    FORGE_CHECK(store.get_tree(root_id).entries().empty());
 }

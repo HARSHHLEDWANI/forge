@@ -8,6 +8,7 @@
 
 using forge::storage::discover_repository_root;
 using forge::storage::initialize_repository;
+using forge::storage::load_config;
 using forge::test::TempDir;
 
 namespace {
@@ -79,4 +80,42 @@ FORGE_TEST_CASE(discover_repository_root_returns_nullopt_when_absent) {
     TempDir dir; // no .forge created
     const auto found = discover_repository_root(dir.path());
     FORGE_CHECK(!found.has_value());
+}
+
+FORGE_TEST_CASE(initialize_repository_creates_head_pointing_at_default_branch) {
+    TempDir dir;
+    const auto result = initialize_repository(dir.path());
+
+    const std::string head = read_file(result.forge_dir / "HEAD");
+    FORGE_CHECK(head == "ref: refs/heads/main\n");
+}
+
+FORGE_TEST_CASE(initialize_repository_preserves_existing_head_on_reinit) {
+    TempDir dir;
+    const auto first = initialize_repository(dir.path());
+    const std::filesystem::path head_path = first.forge_dir / "HEAD";
+    std::ofstream(head_path, std::ios::trunc) << "ref: refs/heads/custom\n";
+
+    initialize_repository(dir.path());
+    FORGE_CHECK(read_file(head_path) == "ref: refs/heads/custom\n");
+}
+
+FORGE_TEST_CASE(load_config_defaults_author_fields_to_empty) {
+    TempDir dir;
+    const auto result = initialize_repository(dir.path());
+    const auto config = load_config(result.forge_dir);
+    FORGE_CHECK(config.author_name.empty());
+    FORGE_CHECK(config.author_email.empty());
+}
+
+FORGE_TEST_CASE(load_config_reads_author_fields_when_present) {
+    TempDir dir;
+    const auto result = initialize_repository(dir.path());
+    std::ofstream(result.forge_dir / "config", std::ios::app)
+        << "author_name = Ada Lovelace\n"
+        << "author_email = ada@example.com\n";
+
+    const auto config = load_config(result.forge_dir);
+    FORGE_CHECK(config.author_name == "Ada Lovelace");
+    FORGE_CHECK(config.author_email == "ada@example.com");
 }

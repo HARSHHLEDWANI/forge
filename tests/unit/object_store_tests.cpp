@@ -1,6 +1,7 @@
 #include <fstream>
 
 #include "core/blob.hpp"
+#include "core/commit.hpp"
 #include "core/error.hpp"
 #include "core/object_id.hpp"
 #include "storage/object_store.hpp"
@@ -8,6 +9,7 @@
 #include "support/test_framework.hpp"
 
 using forge::core::Blob;
+using forge::core::Commit;
 using forge::storage::ObjectStore;
 using forge::test::TempDir;
 
@@ -121,6 +123,31 @@ FORGE_TEST_CASE(get_blob_rejects_non_blob_object) {
     bool threw = false;
     try {
         store.get_blob(tree_id);
+    } catch (const forge::core::ForgeError&) {
+        threw = true;
+    }
+    FORGE_CHECK(threw);
+}
+
+FORGE_TEST_CASE(put_commit_and_get_commit_round_trip) {
+    TempDir dir;
+    ObjectStore store(dir.path());
+    const Commit commit{
+        forge::core::ObjectId::of("tree"), {}, "A Author <a@example.com>", 1700000000, "initial commit"};
+
+    const auto id = store.put_commit(commit);
+    const Commit result = store.get_commit(id);
+    FORGE_CHECK(result == commit);
+}
+
+FORGE_TEST_CASE(get_commit_rejects_non_commit_object) {
+    TempDir dir;
+    ObjectStore store(dir.path());
+    const auto blob_id = store.put_blob(Blob{"not a commit"});
+
+    bool threw = false;
+    try {
+        store.get_commit(blob_id);
     } catch (const forge::core::ForgeError&) {
         threw = true;
     }

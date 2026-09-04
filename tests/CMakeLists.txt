@@ -15,6 +15,11 @@ add_executable(forge_unit_tests
   unit/index_tests.cpp
   unit/index_store_tests.cpp
   unit/staging_tests.cpp
+  unit/commit_tests.cpp
+  unit/ref_store_tests.cpp
+  unit/committing_tests.cpp
+  unit/branching_tests.cpp
+  unit/log_tests.cpp
 )
 target_include_directories(forge_unit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(forge_unit_tests PRIVATE forge_core)

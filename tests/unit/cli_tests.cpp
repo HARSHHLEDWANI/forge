@@ -166,3 +166,175 @@ FORGE_TEST_CASE(run_add_dot_stages_working_tree) {
     FORGE_CHECK(out.str().find("add 'tracked.txt'") != std::string::npos);
     FORGE_CHECK(err.str().empty());
 }
+
+namespace {
+
+// Discard buffer for setup calls (init/add/commit) whose own output a test
+// doesn't care about checking.
+std::ostringstream& out_sink() {
+    static std::ostringstream sink;
+    sink.str("");
+    sink.clear();
+    return sink;
+}
+
+void configure_author(const std::filesystem::path& repo_dir) {
+    std::ofstream config(repo_dir / ".forge" / "config", std::ios::app);
+    config << "author_name = Test Author\n";
+    config << "author_email = test@example.com\n";
+}
+
+} // namespace
+
+FORGE_TEST_CASE(run_commit_without_message_is_a_usage_error) {
+    std::ostringstream out;
+    std::ostringstream err;
+    const int code = run({"commit"}, out, err);
+    FORGE_CHECK(code != 0);
+    FORGE_CHECK(err.str().find("commit message required") != std::string::npos);
+}
+
+FORGE_TEST_CASE(run_commit_without_author_configured_fails) {
+    TempDir dir;
+    CwdGuard guard;
+    std::filesystem::current_path(dir.path());
+    run({"init"}, out_sink(), out_sink());
+    std::ofstream("tracked.txt", std::ios::binary) << "content";
+    run({"add", "."}, out_sink(), out_sink());
+
+    std::ostringstream out;
+    std::ostringstream err;
+    const int code = run({"commit", "-m", "first"}, out, err);
+    FORGE_CHECK(code != 0);
+    FORGE_CHECK(err.str().find("no author identity configured") != std::string::npos);
+}
+
+FORGE_TEST_CASE(run_commit_creates_commit_and_advances_branch) {
+    TempDir dir;
+    CwdGuard guard;
+    std::filesystem::current_path(dir.path());
+    run({"init"}, out_sink(), out_sink());
+    configure_author(dir.path());
+    std::ofstream("tracked.txt", std::ios::binary) << "content";
+    run({"add", "."}, out_sink(), out_sink());
+
+    std::ostringstream out;
+    std::ostringstream err;
+    const int code = run({"commit", "-m", "first commit"}, out, err);
+    FORGE_CHECK(code == 0);
+    FORGE_CHECK(out.str().find("first commit") != std::string::npos);
+    FORGE_CHECK(err.str().empty());
+}
+
+FORGE_TEST_CASE(run_commit_with_nothing_staged_and_no_prior_commit_still_commits_empty_tree) {
+    TempDir dir;
+    CwdGuard guard;
+    std::filesystem::current_path(dir.path());
+    run({"init"}, out_sink(), out_sink());
+    configure_author(dir.path());
+
+    std::ostringstream out;
+    std::ostringstream err;
+    const int code = run({"commit", "-m", "empty"}, out, err);
+    FORGE_CHECK(code == 0);
+}
+
+FORGE_TEST_CASE(run_commit_twice_with_no_changes_fails) {
+    TempDir dir;
+    CwdGuard guard;
+    std::filesystem::current_path(dir.path());
+    run({"init"}, out_sink(), out_sink());
+    configure_author(dir.path());
+    std::ofstream("tracked.txt", std::ios::binary) << "content";
+    run({"add", "."}, out_sink(), out_sink());
+    run({"commit", "-m", "first"}, out_sink(), out_sink());
+
+    std::ostringstream out;
+    std::ostringstream err;
+    const int code = run({"commit", "-m", "second"}, out, err);
+    FORGE_CHECK(code != 0);
+    FORGE_CHECK(err.str().find("nothing to commit") != std::string::npos);
+}
+
+FORGE_TEST_CASE(run_log_with_no_commits_reports_that) {
+    TempDir dir;
+    CwdGuard guard;
+    std::filesystem::current_path(dir.path());
+    run({"init"}, out_sink(), out_sink());
+
+    std::ostringstream out;
+    std::ostringstream err;
+    const int code = run({"log"}, out, err);
+    FORGE_CHECK(code == 0);
+    FORGE_CHECK(out.str().find("no commits yet") != std::string::npos);
+}
+
+FORGE_TEST_CASE(run_log_shows_committed_history) {
+    TempDir dir;
+    CwdGuard guard;
+    std::filesystem::current_path(dir.path());
+    run({"init"}, out_sink(), out_sink());
+    configure_author(dir.path());
+    std::ofstream("tracked.txt", std::ios::binary) << "content";
+    run({"add", "."}, out_sink(), out_sink());
+    run({"commit", "-m", "first commit"}, out_sink(), out_sink());
+
+    std::ostringstream out;
+    std::ostringstream err;
+    const int code = run({"log"}, out, err);
+    FORGE_CHECK(code == 0);
+    FORGE_CHECK(out.str().find("first commit") != std::string::npos);
+    FORGE_CHECK(out.str().find("Test Author <test@example.com>") != std::string::npos);
+}
+
+FORGE_TEST_CASE(run_branch_with_no_commits_lists_nothing) {
+    TempDir dir;
+    CwdGuard guard;
+    std::filesystem::current_path(dir.path());
+    run({"init"}, out_sink(), out_sink());
+
+    std::ostringstream out;
+    std::ostringstream err;
+    const int code = run({"branch"}, out, err);
+    FORGE_CHECK(code == 0);
+    FORGE_CHECK(out.str().empty());
+}
+
+FORGE_TEST_CASE(run_branch_lists_current_branch_after_first_commit) {
+    TempDir dir;
+    CwdGuard guard;
+    std::filesystem::current_path(dir.path());
+    run({"init"}, out_sink(), out_sink());
+    configure_author(dir.path());
+    std::ofstream("tracked.txt", std::ios::binary) << "content";
+    run({"add", "."}, out_sink(), out_sink());
+    run({"commit", "-m", "first"}, out_sink(), out_sink());
+
+    std::ostringstream out;
+    std::ostringstream err;
+    const int code = run({"branch"}, out, err);
+    FORGE_CHECK(code == 0);
+    FORGE_CHECK(out.str().find("* main") != std::string::npos);
+}
+
+FORGE_TEST_CASE(run_branch_with_name_creates_new_branch) {
+    TempDir dir;
+    CwdGuard guard;
+    std::filesystem::current_path(dir.path());
+    run({"init"}, out_sink(), out_sink());
+    configure_author(dir.path());
+    std::ofstream("tracked.txt", std::ios::binary) << "content";
+    run({"add", "."}, out_sink(), out_sink());
+    run({"commit", "-m", "first"}, out_sink(), out_sink());
+
+    std::ostringstream out;
+    std::ostringstream err;
+    const int code = run({"branch", "feature"}, out, err);
+    FORGE_CHECK(code == 0);
+
+    std::ostringstream list_out;
+    std::ostringstream list_err;
+    run({"branch"}, list_out, list_err);
+    FORGE_CHECK(list_out.str().find("  feature") != std::string::npos);
+    FORGE_CHECK(list_out.str().find("* main") != std::string::npos);
+}

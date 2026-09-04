@@ -36,3 +36,19 @@ any staged-but-uncommitted change anywhere blocks the whole checkout,
 rather than being selectively carried forward, since there's no
 diff/merge machinery yet (Phase 8/9) to resolve that partially.
 
+Diff layer (Phase 8): `diff_index` (a pure path-by-path comparison of
+two flat snapshots — reused for tree-vs-index, index-vs-tree, and
+index-vs-working-tree; what "Added" means is up to the caller),
+`snapshot_working_tree` (a read-only Index-shaped hash of the current
+working directory — same walk as `staging`, but never writes to the
+ObjectStore), `diff_blob_content` (line-level LCS edit script, O(N*M) —
+simpler and safer to get right than a hand-rolled Myers O(ND), with the
+quadratic cost accepted for now per AGENTS.md's correctness-before-
+performance and revisited only if Phase 19 benchmarks say so; binary
+content — detected the way Git does, a NUL byte in the first 8000
+bytes — is reported as opaque rather than line-split), `render_unified_diff`
+(one hunk covering the whole file, not Git's windowed multi-hunk
+context — a deliberate simplicity trade-off), and `diff_working_tree`
+(the `forge diff` view: unstaged, tracked-file changes only —
+untracked files are excluded, matching plain `git diff`).
+

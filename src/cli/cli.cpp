@@ -10,10 +10,12 @@
 #include "core/checkout.hpp"
 #include "core/commit.hpp"
 #include "core/committing.hpp"
+#include "core/diff.hpp"
 #include "core/error.hpp"
 #include "core/ignore_rules.hpp"
 #include "core/log.hpp"
 #include "core/staging.hpp"
+#include "core/tree_builder.hpp"
 #include "core/version.hpp"
 #include "storage/index_store.hpp"
 #include "storage/object_store.hpp"
@@ -35,6 +37,8 @@ constexpr std::string_view kUsage =
     "  branch [name]   List branches, or create one at HEAD\n"
     "  switch <name>   Switch to an existing branch\n"
     "  checkout <ref>  Switch to a branch, or detach HEAD at a commit\n"
+    "  status          Show staged, unstaged, and untracked changes\n"
+    "  diff            Show unstaged changes, line by line\n"
     "  version         Print the Forge version\n"
     "  --help, -h      Show this help message\n";
 
@@ -83,6 +87,15 @@ std::string resolve_author(const storage::RepositoryConfig& config) {
             "or the FORGE_AUTHOR_NAME/FORGE_AUTHOR_EMAIL environment variables");
     }
     return name + " <" + email + ">";
+}
+
+std::string_view status_word(core::ChangeType type) {
+    switch (type) {
+        case core::ChangeType::Added: return "new file";
+        case core::ChangeType::Modified: return "modified";
+        case core::ChangeType::Deleted: return "deleted";
+    }
+    return "changed";
 }
 
 std::int64_t current_unix_timestamp() {
@@ -158,6 +171,14 @@ ParseResult parse_args(const std::vector<std::string>& args) {
         if (args.size() >= 2) {
             result.checkout_target = args[1];
         }
+        return result;
+    }
+    if (first == "status") {
+        result.command = Command::Status;
+        return result;
+    }
+    if (first == "diff") {
+        result.command = Command::Diff;
         return result;
     }
     result.command = Command::Unknown;
@@ -359,6 +380,95 @@ int run(const std::vector<std::string>& args, std::ostream& out, std::ostream& e
                     out << "Switched to branch '" << result.checkout_target << "'\n";
                 } else {
                     out << "HEAD is now at " << target->commit_id.to_hex().substr(0, 12) << '\n';
+                }
+                return 0;
+            } catch (const core::ForgeError& e) {
+                err << "forge: " << e.what() << '\n';
+                return 1;
+            }
+        }
+        case Command::Status: {
+            try {
+                const std::optional<RepoContext> ctx = discover_repo_context(err);
+                if (!ctx) {
+                    return 1;
+                }
+                const storage::RepositoryConfig config = storage::load_config(ctx->forge_dir);
+
+                storage::ObjectStore objects(config.storage_root);
+                storage::IndexStore index_store(ctx->forge_dir / storage::kIndexFileName);
+                storage::RefStore refs(ctx->forge_dir);
+                const core::IgnoreRules ignore_rules = load_ignore_rules(ctx->repo_root);
+
+                const storage::RefStore::Head head = refs.read_head();
+                if (head.branch) {
+                    out << "On branch " << *head.branch << '\n';
+                } else {
+                    out << "HEAD detached at " << head.detached_commit->to_hex().substr(0, 12) << '\n';
+                }
+
+                const std::optional<core::ObjectId> head_commit = refs.resolve_head();
+                const core::Index head_tree_index = head_commit
+                                                         ? core::flatten_tree_to_index(
+                                                               objects, objects.get_commit(*head_commit).tree_id)
+                                                         : core::Index{};
+                const core::Index current_index = index_store.load();
+                const core::Index working_snapshot = core::snapshot_working_tree(ignore_rules, ctx->repo_root);
+
+                const std::vector<core::EntryChange> staged = core::diff_index(head_tree_index, current_index);
+                std::vector<core::EntryChange> unstaged;
+                std::vector<core::EntryChange> untracked;
+                for (const core::EntryChange& change : core::diff_index(current_index, working_snapshot)) {
+                    if (change.type == core::ChangeType::Added) {
+                        untracked.push_back(change);
+                    } else {
+                        unstaged.push_back(change);
+                    }
+                }
+
+                if (!staged.empty()) {
+                    out << "\nChanges to be committed:\n";
+                    for (const core::EntryChange& change : staged) {
+                        out << "  " << status_word(change.type) << ":   " << change.path << '\n';
+                    }
+                }
+                if (!unstaged.empty()) {
+                    out << "\nChanges not staged for commit:\n";
+                    for (const core::EntryChange& change : unstaged) {
+                        out << "  " << status_word(change.type) << ":   " << change.path << '\n';
+                    }
+                }
+                if (!untracked.empty()) {
+                    out << "\nUntracked files:\n";
+                    for (const core::EntryChange& change : untracked) {
+                        out << "  " << change.path << '\n';
+                    }
+                }
+                if (staged.empty() && unstaged.empty() && untracked.empty()) {
+                    out << "\nnothing to commit, working tree clean\n";
+                }
+                return 0;
+            } catch (const core::ForgeError& e) {
+                err << "forge: " << e.what() << '\n';
+                return 1;
+            }
+        }
+        case Command::Diff: {
+            try {
+                const std::optional<RepoContext> ctx = discover_repo_context(err);
+                if (!ctx) {
+                    return 1;
+                }
+                const storage::RepositoryConfig config = storage::load_config(ctx->forge_dir);
+
+                storage::ObjectStore objects(config.storage_root);
+                storage::IndexStore index_store(ctx->forge_dir / storage::kIndexFileName);
+                const core::IgnoreRules ignore_rules = load_ignore_rules(ctx->repo_root);
+
+                const core::Index current_index = index_store.load();
+                for (const core::FileDiff& file_diff :
+                     core::diff_working_tree(objects, current_index, ignore_rules, ctx->repo_root)) {
+                    out << core::render_unified_diff(file_diff.path, file_diff.content);
                 }
                 return 0;
             } catch (const core::ForgeError& e) {

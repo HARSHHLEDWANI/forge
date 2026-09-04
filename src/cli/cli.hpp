@@ -6,7 +6,7 @@
 
 namespace forge::cli {
 
-enum class Command { Help, Version, Init, Add, Commit, Log, Branch, Switch, Checkout, Unknown };
+enum class Command { Help, Version, Init, Add, Commit, Log, Branch, Switch, Checkout, Status, Diff, Unknown };
 
 struct ParseResult {
     Command command = Command::Help;

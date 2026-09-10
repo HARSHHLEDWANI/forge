@@ -86,8 +86,9 @@ FORGE_TEST_CASE(http_server_rejects_a_malformed_request_line) {
 
 FORGE_TEST_CASE(wire_routes_exposes_a_healthz_endpoint) {
     forge::test::TempDir repos_root;
+    forge::test::TempDir data_root;
     HttpServer server("127.0.0.1", 0);
-    forge::server::wire_routes(server, repos_root.path());
+    forge::server::wire_routes(server, repos_root.path(), data_root.path());
     RunningServer running(server);
 
     const std::string response = send_raw_http_request(server.port(), "GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n");
@@ -97,8 +98,9 @@ FORGE_TEST_CASE(wire_routes_exposes_a_healthz_endpoint) {
 
 FORGE_TEST_CASE(wire_routes_exposes_a_version_endpoint) {
     forge::test::TempDir repos_root;
+    forge::test::TempDir data_root;
     HttpServer server("127.0.0.1", 0);
-    forge::server::wire_routes(server, repos_root.path());
+    forge::server::wire_routes(server, repos_root.path(), data_root.path());
     RunningServer running(server);
 
     const std::string response = send_raw_http_request(server.port(), "GET /version HTTP/1.1\r\nHost: x\r\n\r\n");

@@ -31,6 +31,14 @@ add_executable(forge_unit_tests
   unit/remote_protocol_tests.cpp
   unit/repo_registry_tests.cpp
   unit/remote_tests.cpp
+  unit/base64_tests.cpp
+  unit/password_tests.cpp
+  unit/ssh_key_tests.cpp
+  unit/token_tests.cpp
+  unit/permissions_tests.cpp
+  unit/audit_log_tests.cpp
+  unit/auth_store_tests.cpp
+  unit/server_auth_tests.cpp
 )
 target_include_directories(forge_unit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 find_package(Threads REQUIRED)

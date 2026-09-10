@@ -52,11 +52,12 @@ std::string read_file(const std::filesystem::path& path) {
 // logic alone.
 struct RemoteTestServer {
     TempDir repos_root;
+    TempDir data_root;
     forge::transport::HttpServer http_server{"127.0.0.1", 0};
     std::thread thread;
 
     RemoteTestServer() {
-        forge::server::wire_routes(http_server, repos_root.path());
+        forge::server::wire_routes(http_server, repos_root.path(), data_root.path());
         http_server.start();
         thread = std::thread([this] { http_server.serve(); });
     }

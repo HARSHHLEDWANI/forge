@@ -39,6 +39,9 @@ add_executable(forge_unit_tests
   unit/audit_log_tests.cpp
   unit/auth_store_tests.cpp
   unit/server_auth_tests.cpp
+  unit/postgres_connection_tests.cpp
+  unit/migrations_tests.cpp
+  unit/repository_directory_tests.cpp
 )
 target_include_directories(forge_unit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 find_package(Threads REQUIRED)
@@ -46,6 +49,7 @@ target_link_libraries(forge_unit_tests PRIVATE forge_core Threads::Threads)
 if(WIN32)
   target_link_libraries(forge_unit_tests PRIVATE ws2_32)
 endif()
+target_compile_definitions(forge_unit_tests PRIVATE FORGE_MIGRATIONS_DIR="${CMAKE_SOURCE_DIR}/migrations")
 forge_apply_warnings(forge_unit_tests)
 
 add_test(NAME forge_unit_tests COMMAND forge_unit_tests)

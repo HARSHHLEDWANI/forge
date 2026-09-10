@@ -18,6 +18,7 @@ function(forge_apply_warnings target)
 endfunction()
 
 find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+find_package(PostgreSQL REQUIRED)
 
 add_library(forge_core STATIC
   src/core/logging.cpp
@@ -61,9 +62,12 @@ add_library(forge_core STATIC
   src/domain/token.cpp
   src/domain/permissions.cpp
   src/domain/audit_log.cpp
+  src/database/postgres_connection.cpp
+  src/database/migrations.cpp
+  src/database/repository_directory.cpp
 )
 target_include_directories(forge_core PUBLIC src)
-target_link_libraries(forge_core PRIVATE OpenSSL::Crypto)
+target_link_libraries(forge_core PRIVATE OpenSSL::Crypto PostgreSQL::PostgreSQL)
 if(WIN32)
   target_link_libraries(forge_core PRIVATE ws2_32)
 endif()

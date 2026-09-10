@@ -1,0 +1,35 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: forge
+      POSTGRES_PASSWORD: forge
+      POSTGRES_DB: forge
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U forge -d forge"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    volumes:
+      - .:/workspace
+    working_dir: /workspace
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # See src/database/postgres_connection.hpp — Phase 15's tests read
+      # this to find a live database; unset (the plain `docker run
+      # forge-dev` path scripts/dev-build.ps1 uses) they just no-op
+      # rather than fail, so the rest of the suite doesn't need Postgres.
+      FORGE_TEST_DATABASE_URL: postgresql://forge:forge@postgres:5432/forge
+    command: >
+      bash -lc "cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug &&
+                cmake --build build &&
+                ctest --test-dir build --output-on-failure"

@@ -6,7 +6,9 @@
 
 namespace forge::cli {
 
-enum class Command { Help, Version, Init, Add, Commit, Log, Branch, Switch, Checkout, Status, Diff, Unknown };
+enum class Command {
+    Help, Version, Init, Add, Commit, Log, Branch, Switch, Checkout, Status, Diff, Merge, Unknown
+};
 
 struct ParseResult {
     Command command = Command::Help;
@@ -29,6 +31,11 @@ struct ParseResult {
     std::string switch_target;
     // Populated only when command == Checkout; empty is a usage error.
     std::string checkout_target;
+    // Populated only when command == Merge; empty is a usage error.
+    std::string merge_target;
+    // Populated only when command == Merge; empty means `run()` should
+    // generate a default merge commit message.
+    std::string merge_message;
 };
 
 // Pure and side-effect free so it is easy to unit test independently of

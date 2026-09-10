@@ -14,6 +14,7 @@
 #include "core/error.hpp"
 #include "core/ignore_rules.hpp"
 #include "core/log.hpp"
+#include "core/merge.hpp"
 #include "core/staging.hpp"
 #include "core/tree_builder.hpp"
 #include "core/version.hpp"
@@ -39,6 +40,7 @@ constexpr std::string_view kUsage =
     "  checkout <ref>  Switch to a branch, or detach HEAD at a commit\n"
     "  status          Show staged, unstaged, and untracked changes\n"
     "  diff            Show unstaged changes, line by line\n"
+    "  merge <ref>     Merge a branch or commit into the current branch\n"
     "  version         Print the Forge version\n"
     "  --help, -h      Show this help message\n";
 
@@ -179,6 +181,18 @@ ParseResult parse_args(const std::vector<std::string>& args) {
     }
     if (first == "diff") {
         result.command = Command::Diff;
+        return result;
+    }
+    if (first == "merge") {
+        result.command = Command::Merge;
+        for (std::size_t i = 1; i < args.size(); ++i) {
+            if (args[i] == "-m" && i + 1 < args.size()) {
+                result.merge_message = args[i + 1];
+                ++i;
+            } else if (result.merge_target.empty()) {
+                result.merge_target = args[i];
+            }
+        }
         return result;
     }
     result.command = Command::Unknown;
@@ -448,6 +462,60 @@ int run(const std::vector<std::string>& args, std::ostream& out, std::ostream& e
                     out << "\nnothing to commit, working tree clean\n";
                 }
                 return 0;
+            } catch (const core::ForgeError& e) {
+                err << "forge: " << e.what() << '\n';
+                return 1;
+            }
+        }
+        case Command::Merge: {
+            if (result.merge_target.empty()) {
+                err << "forge: a branch or commit is required\n";
+                return 1;
+            }
+            try {
+                const std::optional<RepoContext> ctx = discover_repo_context(err);
+                if (!ctx) {
+                    return 1;
+                }
+                const storage::RepositoryConfig config = storage::load_config(ctx->forge_dir);
+
+                storage::ObjectStore objects(config.storage_root);
+                storage::IndexStore index_store(ctx->forge_dir / storage::kIndexFileName);
+                storage::RefStore refs(ctx->forge_dir);
+
+                const std::string author = resolve_author(config);
+                const storage::RefStore::Head head = refs.read_head();
+                std::string message = result.merge_message;
+                if (message.empty()) {
+                    message = "Merge branch '" + result.merge_target + "'";
+                    if (head.branch) {
+                        message += " into " + *head.branch;
+                    }
+                }
+
+                const core::MergeResult merge_result = core::merge(
+                    objects, index_store, refs, ctx->repo_root, result.merge_target, author, message,
+                    current_unix_timestamp());
+
+                switch (merge_result.outcome) {
+                    case core::MergeOutcome::AlreadyUpToDate:
+                        out << "Already up to date.\n";
+                        return 0;
+                    case core::MergeOutcome::FastForward:
+                        out << "Fast-forward to " << merge_result.commit_id->to_hex().substr(0, 12) << '\n';
+                        return 0;
+                    case core::MergeOutcome::Merged:
+                        out << "Merge made: [" << merge_result.commit_id->to_hex().substr(0, 12) << "] " << message
+                            << '\n';
+                        return 0;
+                    case core::MergeOutcome::Conflict:
+                        out << "Automatic merge failed; fix conflicts and then commit the result:\n";
+                        for (const core::MergeConflict& conflict : merge_result.conflicts) {
+                            out << "  conflict: " << conflict.path << '\n';
+                        }
+                        return 1;
+                }
+                return 1;
             } catch (const core::ForgeError& e) {
                 err << "forge: " << e.what() << '\n';
                 return 1;

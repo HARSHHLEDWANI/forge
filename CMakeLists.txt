@@ -35,6 +35,7 @@ add_library(forge_core STATIC
   src/core/log.cpp
   src/core/checkout.cpp
   src/core/diff.cpp
+  src/core/merge.cpp
   src/cli/cli.cpp
   src/storage/safe_path.cpp
   src/storage/atomic_file.cpp

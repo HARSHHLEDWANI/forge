@@ -118,7 +118,7 @@ FORGE_PG_TEST_CASE(enqueue_and_claim_and_finish_a_job) {
     FORGE_CHECK(claimed->id == job_id);
     FORGE_CHECK(claimed->status == "running");
 
-    finish_job(fixture.connection, job_id, true, "");
+    finish_job(fixture.connection, job_id);
     const auto status = fixture.connection.exec("SELECT status, error FROM jobs WHERE id = $1", {std::to_string(job_id)});
     FORGE_CHECK(status.rows[0][0].value_or("") == "done");
     FORGE_CHECK(!status.rows[0][1].has_value());
@@ -130,17 +130,39 @@ FORGE_PG_TEST_CASE(claim_next_pending_job_returns_nullopt_when_the_queue_is_empt
     FORGE_CHECK(!claim_next_pending_job(fixture.connection).has_value());
 }
 
-FORGE_PG_TEST_CASE(finish_job_records_the_error_on_failure) {
+FORGE_PG_TEST_CASE(reschedule_job_after_failure_records_the_error_once_attempts_are_exhausted) {
     PostgresFixture fixture(pg_url);
     ensure_migrations_applied(fixture.connection);
-    const std::int64_t job_id = enqueue_job(fixture.connection, "backup", "{}");
-    claim_next_pending_job(fixture.connection);
-    finish_job(fixture.connection, job_id, false, "disk full");
+    const std::int64_t job_id = enqueue_job(fixture.connection, "backup", "{}", /*max_attempts=*/1);
+    const auto claimed = claim_next_pending_job(fixture.connection);
+    FORGE_CHECK(claimed.has_value());
+
+    const bool retried = reschedule_job_after_failure(fixture.connection, *claimed, "disk full", 60);
+    FORGE_CHECK(!retried); // max_attempts=1: no retries left
 
     const auto status =
         fixture.connection.exec("SELECT status, error FROM jobs WHERE id = $1", {std::to_string(job_id)});
     FORGE_CHECK(status.rows[0][0].value_or("") == "failed");
     FORGE_CHECK(status.rows[0][1].value_or("") == "disk full");
+}
+
+FORGE_PG_TEST_CASE(reschedule_job_after_failure_makes_it_claimable_again_once_the_backoff_elapses) {
+    PostgresFixture fixture(pg_url);
+    ensure_migrations_applied(fixture.connection);
+    enqueue_job(fixture.connection, "backup", "{}", /*max_attempts=*/3);
+    const auto claimed = claim_next_pending_job(fixture.connection);
+    FORGE_CHECK(claimed.has_value());
+
+    // A zero-second backoff means "claimable again immediately" —
+    // avoids an actual sleep in this test while still exercising the
+    // real reschedule-then-reclaim path.
+    const bool retried = reschedule_job_after_failure(fixture.connection, *claimed, "transient error", 0);
+    FORGE_CHECK(retried);
+
+    const auto reclaimed = claim_next_pending_job(fixture.connection);
+    FORGE_CHECK(reclaimed.has_value());
+    FORGE_CHECK(reclaimed->id == claimed->id);
+    FORGE_CHECK(reclaimed->attempts == 1);
 }
 
 // Two workers polling concurrently must never claim the same job — the

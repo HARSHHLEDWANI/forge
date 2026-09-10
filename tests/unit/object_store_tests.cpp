@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <fstream>
 
 #include "core/blob.hpp"
@@ -152,6 +153,40 @@ FORGE_TEST_CASE(get_commit_rejects_non_commit_object) {
         threw = true;
     }
     FORGE_CHECK(threw);
+}
+
+FORGE_TEST_CASE(scan_lists_every_stored_object_id) {
+    TempDir dir;
+    ObjectStore store(dir.path());
+    const auto blob_id = store.put_blob(Blob{"a"});
+    const auto tree_id = store.put("tree", "b");
+
+    const auto scan = store.scan();
+    FORGE_CHECK(scan.object_ids.size() == 2);
+    FORGE_CHECK(
+        std::find(scan.object_ids.begin(), scan.object_ids.end(), blob_id) != scan.object_ids.end());
+    FORGE_CHECK(
+        std::find(scan.object_ids.begin(), scan.object_ids.end(), tree_id) != scan.object_ids.end());
+    FORGE_CHECK(scan.unexpected_files.empty());
+}
+
+FORGE_TEST_CASE(scan_reports_a_leftover_temp_file_as_unexpected) {
+    TempDir dir;
+    ObjectStore store(dir.path());
+    const auto id = store.put_blob(Blob{"a"});
+
+    // Simulate a process that crashed between write_file_atomic creating
+    // the sibling temp file and renaming it into place (atomic_file.hpp).
+    const std::string hex = id.to_hex();
+    const std::filesystem::path shard = dir.path() / hex.substr(0, 2);
+    {
+        std::ofstream leftover(shard / (hex.substr(2) + ".tmp-deadbeef"), std::ios::binary);
+        leftover << "partial";
+    }
+
+    const auto scan = store.scan();
+    FORGE_CHECK(scan.object_ids.size() == 1);
+    FORGE_CHECK(scan.unexpected_files.size() == 1);
 }
 
 FORGE_TEST_CASE(store_round_trips_binary_payload) {

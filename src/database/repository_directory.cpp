@@ -106,16 +106,19 @@ std::vector<DbMembership> list_repository_memberships(PostgresConnection& db, st
     return memberships;
 }
 
-std::int64_t enqueue_job(PostgresConnection& db, std::string_view kind, std::string_view payload) {
+std::int64_t enqueue_job(PostgresConnection& db, std::string_view kind, std::string_view payload, int max_attempts) {
     const QueryResult result = db.exec(
-        "INSERT INTO jobs (kind, payload) VALUES ($1, $2) RETURNING id", {std::string(kind), std::string(payload)});
+        "INSERT INTO jobs (kind, payload, max_attempts) VALUES ($1, $2, $3) RETURNING id",
+        {std::string(kind), std::string(payload), std::to_string(max_attempts)});
     return require_id(result);
 }
 
 std::optional<DbJob> claim_next_pending_job(PostgresConnection& db) {
     Transaction transaction(db);
     const QueryResult candidate = db.exec(
-        "SELECT id, kind, payload FROM jobs WHERE status = 'pending' ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1");
+        "SELECT id, kind, payload, attempts, max_attempts FROM jobs "
+        "WHERE status = 'pending' AND next_attempt_at <= now() "
+        "ORDER BY next_attempt_at, id FOR UPDATE SKIP LOCKED LIMIT 1");
     if (candidate.rows.empty()) {
         transaction.commit();
         return std::nullopt;
@@ -126,14 +129,30 @@ std::optional<DbJob> claim_next_pending_job(PostgresConnection& db) {
     db.exec("UPDATE jobs SET status = 'running', started_at = now() WHERE id = $1", {std::to_string(id)});
     transaction.commit();
 
-    return DbJob{id, *row[1], *row[2], "running"};
+    return DbJob{id, *row[1], *row[2], "running", std::stoi(row[3].value_or("0")), std::stoi(row[4].value_or("5"))};
 }
 
-void finish_job(PostgresConnection& db, std::int64_t job_id, bool succeeded, std::string_view error_message) {
+void finish_job(PostgresConnection& db, std::int64_t job_id) {
     db.exec(
-        "UPDATE jobs SET status = $2, finished_at = now(), error = $3 WHERE id = $1",
-        {std::to_string(job_id), succeeded ? std::string("done") : std::string("failed"),
-         succeeded ? std::nullopt : std::optional<std::string>(std::string(error_message))});
+        "UPDATE jobs SET status = 'done', finished_at = now(), error = NULL WHERE id = $1",
+        {std::to_string(job_id)});
+}
+
+bool reschedule_job_after_failure(
+    PostgresConnection& db, const DbJob& job, std::string_view error_message, std::int64_t backoff_seconds) {
+    const int attempts_after_this_one = job.attempts + 1;
+    if (attempts_after_this_one < job.max_attempts) {
+        db.exec(
+            "UPDATE jobs SET status = 'pending', attempts = $2, "
+            "next_attempt_at = now() + ($3 || ' seconds')::interval, error = $4 WHERE id = $1",
+            {std::to_string(job.id), std::to_string(attempts_after_this_one), std::to_string(backoff_seconds),
+             std::string(error_message)});
+        return true;
+    }
+    db.exec(
+        "UPDATE jobs SET status = 'failed', attempts = $2, finished_at = now(), error = $3 WHERE id = $1",
+        {std::to_string(job.id), std::to_string(attempts_after_this_one), std::string(error_message)});
+    return false;
 }
 
 } // namespace forge::database

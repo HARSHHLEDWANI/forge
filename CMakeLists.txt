@@ -68,6 +68,7 @@ add_library(forge_core STATIC
   src/database/migrations.cpp
   src/database/repository_directory.cpp
   src/database/collaboration_directory.cpp
+  src/services/worker_pool.cpp
 )
 target_include_directories(forge_core PUBLIC src)
 target_link_libraries(forge_core PRIVATE OpenSSL::Crypto PostgreSQL::PostgreSQL)
@@ -83,6 +84,14 @@ forge_apply_warnings(forge)
 add_executable(forge-server src/main_server.cpp)
 target_link_libraries(forge-server PRIVATE forge_core)
 forge_apply_warnings(forge-server)
+
+add_executable(forge-worker src/main_worker.cpp)
+target_link_libraries(forge-worker PRIVATE forge_core)
+if(NOT WIN32)
+  find_package(Threads REQUIRED)
+  target_link_libraries(forge-worker PRIVATE Threads::Threads)
+endif()
+forge_apply_warnings(forge-worker)
 
 enable_testing()
 add_subdirectory(tests)

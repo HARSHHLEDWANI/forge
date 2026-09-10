@@ -33,6 +33,8 @@ struct DbJob {
     std::string kind;
     std::string payload;
     std::string status;
+    int attempts;
+    int max_attempts;
 };
 
 // A thin, directly-parameterized data-access layer over the tables
@@ -57,16 +59,32 @@ std::optional<std::string> get_membership_role(
     PostgresConnection& db, std::int64_t repository_id, std::int64_t user_id);
 std::vector<DbMembership> list_repository_memberships(PostgresConnection& db, std::int64_t repository_id);
 
-std::int64_t enqueue_job(PostgresConnection& db, std::string_view kind, std::string_view payload);
+// `max_attempts` (default 5) bounds how many times services::WorkerPool
+// will retry this job (see reschedule_job_after_failure) before giving
+// up on it permanently.
+std::int64_t enqueue_job(
+    PostgresConnection& db, std::string_view kind, std::string_view payload, int max_attempts = 5);
 
-// Atomically claims the oldest pending job (`SELECT ... FOR UPDATE SKIP
-// LOCKED`, marking it 'running') so two workers polling concurrently
-// can never both claim the same one — the standard Postgres job-queue
-// pattern, and this codebase's answer to "Study: ... locking"
-// (implementation-plan.md Phase 15). nullopt if the queue is empty.
-// Phase 17 (Workers) is what actually calls this in a loop; it's built
-// here because the locking behavior belongs with the schema it locks.
+// Atomically claims the oldest pending job whose backoff delay has
+// elapsed (`SELECT ... FOR UPDATE SKIP LOCKED`, marking it 'running')
+// so two workers polling concurrently can never both claim the same one
+// — the standard Postgres job-queue pattern, and this codebase's answer
+// to "Study: ... locking" (implementation-plan.md Phase 15). nullopt if
+// the queue has nothing claimable right now.
 std::optional<DbJob> claim_next_pending_job(PostgresConnection& db);
-void finish_job(PostgresConnection& db, std::int64_t job_id, bool succeeded, std::string_view error_message);
+
+// The job succeeded: marks it 'done'.
+void finish_job(PostgresConnection& db, std::int64_t job_id);
+
+// The job's handler threw. If `job.attempts + 1 < job.max_attempts`,
+// reschedules it — status back to 'pending', next_attempt_at pushed out
+// by `backoff_seconds`, `attempts` incremented — for services::WorkerPool
+// (or another worker) to retry later, and returns true. Otherwise marks
+// it 'failed' permanently (recording `error_message`) and returns
+// false. The backoff delay itself is the caller's choice (see
+// services::exponential_backoff_seconds) — this function only applies
+// whatever delay it's given.
+bool reschedule_job_after_failure(
+    PostgresConnection& db, const DbJob& job, std::string_view error_message, std::int64_t backoff_seconds);
 
 } // namespace forge::database

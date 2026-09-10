@@ -434,4 +434,111 @@ MergeResult merge(
     return result;
 }
 
+BareMergeResult merge_in_object_store(
+    storage::ObjectStore& objects, storage::RefStore& refs, const ObjectId& source_commit,
+    std::string_view target_branch, std::string_view author, std::string_view message, std::int64_t timestamp) {
+    if (author.empty()) {
+        throw ForgeError("cannot merge: no author identity configured");
+    }
+    if (message.empty()) {
+        throw ForgeError("cannot merge: message is required");
+    }
+
+    const std::optional<ObjectId> target_commit = refs.read_branch(target_branch);
+    if (!target_commit) {
+        throw ForgeError("cannot merge: no such branch: " + std::string(target_branch));
+    }
+    if (*target_commit == source_commit) {
+        return BareMergeResult{};
+    }
+
+    const std::optional<ObjectId> base = find_merge_base(objects, *target_commit, source_commit);
+    if (!base) {
+        throw ForgeError("cannot merge: refusing to merge unrelated histories");
+    }
+    if (*base == source_commit) {
+        return BareMergeResult{}; // source is already an ancestor of target: nothing to do
+    }
+
+    if (*base == *target_commit) {
+        // Fast-forward: no merge commit, just advance the ref.
+        BareMergeResult result;
+        result.outcome = MergeOutcome::FastForward;
+        refs.update_branch(target_branch, target_commit, source_commit);
+        result.commit_id = source_commit;
+        return result;
+    }
+
+    // True three-way merge, entirely in the object store: flatten_tree_to_index/
+    // build_tree_from_index (tree_builder.hpp) never touch the filesystem, so
+    // this is the same resolution logic merge()'s three-way branch uses, minus
+    // every working-tree/index safety check and write — there's neither to
+    // protect or populate here.
+    const Index base_index = flatten_tree_to_index(objects, objects.get_commit(*base).tree_id);
+    const Index target_index = flatten_tree_to_index(objects, objects.get_commit(*target_commit).tree_id);
+    const Index source_index = flatten_tree_to_index(objects, objects.get_commit(source_commit).tree_id);
+
+    std::set<std::string> all_paths;
+    for (const IndexEntry& e : base_index.entries()) {
+        all_paths.insert(e.path);
+    }
+    for (const IndexEntry& e : target_index.entries()) {
+        all_paths.insert(e.path);
+    }
+    for (const IndexEntry& e : source_index.entries()) {
+        all_paths.insert(e.path);
+    }
+
+    Index merged_index;
+    std::vector<MergeConflict> conflicts;
+    for (const std::string& path : all_paths) {
+        const std::optional<IndexEntry> base_entry = base_index.find(path);
+        const std::optional<IndexEntry> ours_entry = target_index.find(path);
+        const std::optional<IndexEntry> theirs_entry = source_index.find(path);
+
+        const bool ours_changed = !entries_equal(ours_entry, base_entry);
+        const bool theirs_changed = !entries_equal(theirs_entry, base_entry);
+
+        std::optional<IndexEntry> resolved;
+        bool conflict = false;
+        if (!ours_changed && !theirs_changed) {
+            resolved = base_entry;
+        } else if (ours_changed && !theirs_changed) {
+            resolved = ours_entry;
+        } else if (!ours_changed) {
+            resolved = theirs_entry;
+        } else if (entries_equal(ours_entry, theirs_entry)) {
+            resolved = ours_entry;
+        } else {
+            conflict = true;
+        }
+
+        if (conflict) {
+            conflicts.push_back(MergeConflict{
+                path, base_entry ? std::optional(base_entry->blob_id) : std::nullopt,
+                ours_entry ? std::optional(ours_entry->blob_id) : std::nullopt,
+                theirs_entry ? std::optional(theirs_entry->blob_id) : std::nullopt});
+        } else if (resolved) {
+            merged_index.upsert(*resolved);
+        }
+    }
+
+    BareMergeResult result;
+    if (!conflicts.empty()) {
+        result.outcome = MergeOutcome::Conflict;
+        result.conflicts = std::move(conflicts);
+        return result;
+    }
+
+    const ObjectId tree_id = build_tree_from_index(objects, merged_index);
+    std::vector<ObjectId> parents{*target_commit, source_commit};
+    const Commit commit{tree_id, std::move(parents), std::string(author), timestamp, std::string(message)};
+    const ObjectId commit_id = objects.put_commit(commit);
+    refs.update_branch(target_branch, target_commit, commit_id);
+
+    result.outcome = MergeOutcome::Merged;
+    result.commit_id = commit_id;
+    return result;
+}
+
 } // namespace forge::core

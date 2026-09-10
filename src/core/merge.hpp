@@ -75,4 +75,28 @@ MergeResult merge(
     const std::filesystem::path& repo_root, std::string_view their_ref_or_commit, std::string_view author,
     std::string_view message, std::int64_t timestamp);
 
+struct BareMergeResult {
+    MergeOutcome outcome = MergeOutcome::AlreadyUpToDate;
+    std::optional<ObjectId> commit_id;
+    std::vector<MergeConflict> conflicts;
+};
+
+// merge()'s counterpart for a repository with no working tree — every
+// server-hosted repo (server/repo_registry.hpp): the same merge-base/
+// fast-forward/three-way-merge/conflict-detection logic, but reading and
+// writing only the object store and `target_branch`'s ref, since
+// there's no working tree or index to check safety against or update.
+// Used by the server to merge a pull request (server/app.cpp's POST
+// /pulls/merge). A Conflict outcome creates nothing — there's no
+// working tree to write "<<<<<<< ours" markers into either, so the
+// caller's only recourse is reporting the conflicting paths back to
+// whoever needs to resolve them locally (e.g. via `forge merge`, which
+// does have a working tree to mark up).
+//
+// Throws core::ForgeError if `target_branch` doesn't exist, `author`/
+// `message` is empty, or the two histories share no common ancestor.
+BareMergeResult merge_in_object_store(
+    storage::ObjectStore& objects, storage::RefStore& refs, const ObjectId& source_commit,
+    std::string_view target_branch, std::string_view author, std::string_view message, std::int64_t timestamp);
+
 } // namespace forge::core

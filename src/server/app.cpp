@@ -12,7 +12,9 @@
 #include "domain/permissions.hpp"
 #include "domain/ssh_key.hpp"
 #include "domain/token.hpp"
+#include "server/collaboration_routes.hpp"
 #include "server/repo_registry.hpp"
+#include "server/web_ui.hpp"
 #include "storage/auth_store.hpp"
 #include "storage/object_store.hpp"
 #include "storage/ref_store.hpp"
@@ -53,7 +55,11 @@ std::optional<std::string> authenticate(const transport::HttpRequest& request, s
 } // namespace
 
 void wire_routes(
-    transport::HttpServer& server, const std::filesystem::path& repos_root, const std::filesystem::path& data_root) {
+    transport::HttpServer& server, const std::filesystem::path& repos_root, const std::filesystem::path& data_root,
+    const std::string& database_url) {
+    wire_collaboration_routes(server, repos_root, data_root, database_url);
+    wire_web_ui(server, repos_root, database_url);
+
     server.route("GET", "/healthz", [](const transport::HttpRequest&) {
         return transport::json_response(200, "OK", R"({"status":"ok"})");
     });

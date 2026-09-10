@@ -53,6 +53,16 @@ std::int64_t create_repository(PostgresConnection& db, std::string_view name, st
     return id;
 }
 
+std::vector<DbRepository> list_repositories(PostgresConnection& db) {
+    const QueryResult result = db.exec("SELECT id, name, owner_id FROM repositories ORDER BY name");
+    std::vector<DbRepository> repositories;
+    repositories.reserve(result.rows.size());
+    for (const QueryRow& row : result.rows) {
+        repositories.push_back(DbRepository{std::stoll(*row[0]), *row[1], std::stoll(*row[2])});
+    }
+    return repositories;
+}
+
 std::optional<DbRepository> find_repository_by_name(PostgresConnection& db, std::string_view name) {
     const QueryResult result =
         db.exec("SELECT id, name, owner_id FROM repositories WHERE name = $1", {std::string(name)});

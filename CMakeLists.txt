@@ -57,6 +57,8 @@ add_library(forge_core STATIC
   src/transport/http_client.cpp
   src/server/app.cpp
   src/server/repo_registry.cpp
+  src/server/collaboration_routes.cpp
+  src/server/web_ui.cpp
   src/domain/password.cpp
   src/domain/ssh_key.cpp
   src/domain/token.cpp
@@ -65,6 +67,7 @@ add_library(forge_core STATIC
   src/database/postgres_connection.cpp
   src/database/migrations.cpp
   src/database/repository_directory.cpp
+  src/database/collaboration_directory.cpp
 )
 target_include_directories(forge_core PUBLIC src)
 target_link_libraries(forge_core PRIVATE OpenSSL::Crypto PostgreSQL::PostgreSQL)

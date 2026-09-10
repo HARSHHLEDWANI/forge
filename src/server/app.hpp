@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <string>
 
 #include "transport/http_server.hpp"
 
@@ -19,7 +20,13 @@ namespace forge::server {
 // parameter naming one of them. `data_root` is where user accounts,
 // SSH keys, tokens, and permissions live (see storage/auth_store.hpp) —
 // server-wide, not per-repo, the same way a real hosting platform's user
-// accounts aren't scoped to any one repository.
+// accounts aren't scoped to any one repository. `database_url`, if
+// non-empty, also wires Phase 16's collaboration routes (issues, pull
+// requests, reviews, comments, labels, branch protection — see
+// server/collaboration_routes.hpp) and the read-only web UI over them
+// (server/web_ui.hpp); left empty (the default), a server runs with
+// just git + auth, no PostgreSQL required (docs/adr/0001's local-first
+// stance).
 //
 // A repository with no permissions recorded is "legacy/open": every
 // repo created before these auth routes existed, and any repo created
@@ -28,6 +35,7 @@ namespace forge::server {
 // authentication once at least one permission is actually granted on
 // that repo (see POST /permissions and POST /ref's bootstrap comment).
 void wire_routes(
-    transport::HttpServer& server, const std::filesystem::path& repos_root, const std::filesystem::path& data_root);
+    transport::HttpServer& server, const std::filesystem::path& repos_root, const std::filesystem::path& data_root,
+    const std::string& database_url = "");
 
 } // namespace forge::server

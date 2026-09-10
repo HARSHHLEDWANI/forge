@@ -48,6 +48,7 @@ std::optional<DbUser> find_user_by_id(PostgresConnection& db, std::int64_t id);
 
 std::int64_t create_repository(PostgresConnection& db, std::string_view name, std::int64_t owner_id);
 std::optional<DbRepository> find_repository_by_name(PostgresConnection& db, std::string_view name);
+std::vector<DbRepository> list_repositories(PostgresConnection& db);
 
 // Upsert: replaces the role if `user_id` already has one on `repository_id`.
 void set_membership(

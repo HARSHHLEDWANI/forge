@@ -15,6 +15,7 @@ struct ServerArgs {
     std::uint16_t port = 8080;
     std::filesystem::path repos_root = "forge-repos";
     std::filesystem::path data_root = "forge-data";
+    std::string database_url; // empty: no PostgreSQL, collaboration routes/web UI stay off (see server/app.hpp)
 };
 
 ServerArgs parse_server_args(const std::vector<std::string>& args) {
@@ -28,6 +29,8 @@ ServerArgs parse_server_args(const std::vector<std::string>& args) {
             result.repos_root = args[++i];
         } else if (args[i] == "--data-dir" && i + 1 < args.size()) {
             result.data_root = args[++i];
+        } else if (args[i] == "--database-url" && i + 1 < args.size()) {
+            result.database_url = args[++i];
         }
     }
     return result;
@@ -42,7 +45,7 @@ int main(int argc, char** argv) {
     std::filesystem::create_directories(parsed.data_root);
 
     forge::transport::HttpServer http_server(parsed.bind_address, parsed.port);
-    forge::server::wire_routes(http_server, parsed.repos_root, parsed.data_root);
+    forge::server::wire_routes(http_server, parsed.repos_root, parsed.data_root, parsed.database_url);
 
     try {
         http_server.start();

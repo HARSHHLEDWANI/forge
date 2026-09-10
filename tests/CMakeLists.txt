@@ -22,6 +22,7 @@ add_executable(forge_unit_tests
   unit/log_tests.cpp
   unit/checkout_tests.cpp
   unit/diff_tests.cpp
+  unit/merge_tests.cpp
 )
 target_include_directories(forge_unit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(forge_unit_tests PRIVATE forge_core)

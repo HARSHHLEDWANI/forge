@@ -42,12 +42,56 @@ FORGE_TEST_CASE(run_help_prints_usage_and_succeeds) {
     FORGE_CHECK(err.str().empty());
 }
 
-FORGE_TEST_CASE(run_no_args_prints_usage_and_succeeds) {
+FORGE_TEST_CASE(run_no_args_enters_interactive_mode) {
+    std::istringstream in("quit\n");
     std::ostringstream out;
     std::ostringstream err;
-    const int code = run({}, out, err);
+    const int code = forge::cli::run({}, in, out, err);
     FORGE_CHECK(code == 0);
-    FORGE_CHECK(out.str().find("Usage: forge") != std::string::npos);
+    FORGE_CHECK(out.str().find("interactive mode") != std::string::npos);
+    FORGE_CHECK(out.str().find("forge> ") != std::string::npos);
+}
+
+FORGE_TEST_CASE(run_completion_bash_prints_a_completion_script) {
+    std::ostringstream out;
+    std::ostringstream err;
+    const int code = run({"completion", "bash"}, out, err);
+    FORGE_CHECK(code == 0);
+    FORGE_CHECK(out.str().find("_forge_completions") != std::string::npos);
+    FORGE_CHECK(out.str().find("complete -F _forge_completions forge") != std::string::npos);
+}
+
+FORGE_TEST_CASE(run_completion_rejects_an_unsupported_shell) {
+    std::ostringstream out;
+    std::ostringstream err;
+    const int code = run({"completion", "fish"}, out, err);
+    FORGE_CHECK(code != 0);
+    FORGE_CHECK(err.str().find("fish") != std::string::npos);
+}
+
+FORGE_TEST_CASE(run_unknown_command_suggests_a_close_match) {
+    std::ostringstream out;
+    std::ostringstream err;
+    const int code = run({"stauts"}, out, err); // typo for "status"
+    FORGE_CHECK(code != 0);
+    FORGE_CHECK(err.str().find("did you mean 'status'") != std::string::npos);
+}
+
+FORGE_TEST_CASE(run_help_with_topic_prints_that_commands_details) {
+    std::ostringstream out;
+    std::ostringstream err;
+    const int code = run({"help", "merge"}, out, err);
+    FORGE_CHECK(code == 0);
+    FORGE_CHECK(out.str().find("forge merge") != std::string::npos);
+    FORGE_CHECK(out.str().find("Merge a branch or commit into the current branch") != std::string::npos);
+}
+
+FORGE_TEST_CASE(run_help_with_unknown_topic_fails) {
+    std::ostringstream out;
+    std::ostringstream err;
+    const int code = run({"help", "bogus"}, out, err);
+    FORGE_CHECK(code != 0);
+    FORGE_CHECK(err.str().find("bogus") != std::string::npos);
 }
 
 FORGE_TEST_CASE(run_version_prints_version_and_succeeds) {
@@ -185,6 +229,69 @@ void configure_author(const std::filesystem::path& repo_dir) {
 }
 
 } // namespace
+
+FORGE_TEST_CASE(run_interactive_status_needs_no_confirmation_and_prints_a_next_hint) {
+    TempDir dir;
+    CwdGuard guard;
+    std::filesystem::current_path(dir.path());
+    run({"init"}, out_sink(), out_sink());
+
+    std::istringstream in("status\nquit\n");
+    std::ostringstream out;
+    std::ostringstream err;
+    const int code = forge::cli::run({}, in, out, err);
+    FORGE_CHECK(code == 0);
+    FORGE_CHECK(out.str().find("nothing to commit") != std::string::npos);
+    FORGE_CHECK(out.str().find("Next:") != std::string::npos);
+    FORGE_CHECK(out.str().find("Run 'status'?") == std::string::npos); // read-only: no confirmation prompt
+}
+
+FORGE_TEST_CASE(run_interactive_declining_confirmation_skips_a_destructive_command) {
+    TempDir dir;
+    CwdGuard guard;
+    std::filesystem::current_path(dir.path());
+    run({"init"}, out_sink(), out_sink());
+    configure_author(dir.path());
+    std::ofstream("a.txt", std::ios::binary) << "on main";
+    run({"add", "."}, out_sink(), out_sink());
+    run({"commit", "-m", "first"}, out_sink(), out_sink());
+    run({"branch", "feature"}, out_sink(), out_sink());
+
+    std::istringstream in("switch feature\nn\nquit\n");
+    std::ostringstream out;
+    std::ostringstream err;
+    forge::cli::run({}, in, out, err);
+    FORGE_CHECK(out.str().find("Run 'switch feature'? [y/N]") != std::string::npos);
+    FORGE_CHECK(out.str().find("Cancelled.") != std::string::npos);
+
+    std::ostringstream branch_out;
+    std::ostringstream branch_err;
+    run({"branch"}, branch_out, branch_err);
+    FORGE_CHECK(branch_out.str().find("* main") != std::string::npos); // switch was cancelled
+}
+
+FORGE_TEST_CASE(run_interactive_confirming_runs_a_destructive_command) {
+    TempDir dir;
+    CwdGuard guard;
+    std::filesystem::current_path(dir.path());
+    run({"init"}, out_sink(), out_sink());
+    configure_author(dir.path());
+    std::ofstream("a.txt", std::ios::binary) << "on main";
+    run({"add", "."}, out_sink(), out_sink());
+    run({"commit", "-m", "first"}, out_sink(), out_sink());
+    run({"branch", "feature"}, out_sink(), out_sink());
+
+    std::istringstream in("switch feature\ny\nquit\n");
+    std::ostringstream out;
+    std::ostringstream err;
+    forge::cli::run({}, in, out, err);
+    FORGE_CHECK(out.str().find("Switched to branch 'feature'") != std::string::npos);
+
+    std::ostringstream branch_out;
+    std::ostringstream branch_err;
+    run({"branch"}, branch_out, branch_err);
+    FORGE_CHECK(branch_out.str().find("* feature") != std::string::npos);
+}
 
 FORGE_TEST_CASE(run_commit_without_message_is_a_usage_error) {
     std::ostringstream out;

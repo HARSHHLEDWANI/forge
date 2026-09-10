@@ -25,9 +25,19 @@ add_executable(forge_unit_tests
   unit/merge_tests.cpp
   unit/repo_lock_tests.cpp
   unit/verify_tests.cpp
+  unit/http_message_tests.cpp
+  unit/http_parser_tests.cpp
+  unit/http_server_tests.cpp
+  unit/remote_protocol_tests.cpp
+  unit/repo_registry_tests.cpp
+  unit/remote_tests.cpp
 )
 target_include_directories(forge_unit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(forge_unit_tests PRIVATE forge_core)
+find_package(Threads REQUIRED)
+target_link_libraries(forge_unit_tests PRIVATE forge_core Threads::Threads)
+if(WIN32)
+  target_link_libraries(forge_unit_tests PRIVATE ws2_32)
+endif()
 forge_apply_warnings(forge_unit_tests)
 
 add_test(NAME forge_unit_tests COMMAND forge_unit_tests)

@@ -39,6 +39,7 @@ add_library(forge_core STATIC
   src/core/verify.cpp
   src/core/remote_protocol.cpp
   src/core/remote.cpp
+  src/core/base64.cpp
   src/cli/cli.cpp
   src/storage/safe_path.cpp
   src/storage/atomic_file.cpp
@@ -47,6 +48,7 @@ add_library(forge_core STATIC
   src/storage/index_store.cpp
   src/storage/ref_store.cpp
   src/storage/repo_lock.cpp
+  src/storage/auth_store.cpp
   src/transport/socket_compat.cpp
   src/transport/http_message.cpp
   src/transport/http_parser.cpp
@@ -54,6 +56,11 @@ add_library(forge_core STATIC
   src/transport/http_client.cpp
   src/server/app.cpp
   src/server/repo_registry.cpp
+  src/domain/password.cpp
+  src/domain/ssh_key.cpp
+  src/domain/token.cpp
+  src/domain/permissions.cpp
+  src/domain/audit_log.cpp
 )
 target_include_directories(forge_core PUBLIC src)
 target_link_libraries(forge_core PRIVATE OpenSSL::Crypto)

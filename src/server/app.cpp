@@ -1,5 +1,6 @@
 #include "server/app.hpp"
 
+#include <chrono>
 #include <optional>
 
 #include "core/error.hpp"
@@ -8,7 +9,11 @@
 #include "core/object_id.hpp"
 #include "core/remote_protocol.hpp"
 #include "core/version.hpp"
+#include "domain/permissions.hpp"
+#include "domain/ssh_key.hpp"
+#include "domain/token.hpp"
 #include "server/repo_registry.hpp"
+#include "storage/auth_store.hpp"
 #include "storage/object_store.hpp"
 #include "storage/ref_store.hpp"
 #include "storage/repository.hpp"
@@ -28,9 +33,27 @@ transport::HttpResponse internal_error(const core::ForgeError& e) {
     return transport::plain_text_response(500, "Internal Server Error", std::string(e.what()) + "\n");
 }
 
+std::int64_t now_unix() {
+    return std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch())
+        .count();
+}
+
+// Extracts and verifies the "Authorization: Bearer <id>.<secret>" header,
+// returning the authenticated username. nullopt for a missing/malformed
+// header or a token that doesn't verify — the caller decides what that
+// means for the request at hand (some routes require it, most don't).
+std::optional<std::string> authenticate(const transport::HttpRequest& request, storage::AuthStore& auth_store) {
+    const std::optional<std::string> header = transport::find_header(request.headers, "authorization");
+    if (!header || header->rfind("Bearer ", 0) != 0) {
+        return std::nullopt;
+    }
+    return auth_store.authenticate_token(header->substr(std::string_view("Bearer ").size()), now_unix());
+}
+
 } // namespace
 
-void wire_routes(transport::HttpServer& server, const std::filesystem::path& repos_root) {
+void wire_routes(
+    transport::HttpServer& server, const std::filesystem::path& repos_root, const std::filesystem::path& data_root) {
     server.route("GET", "/healthz", [](const transport::HttpRequest&) {
         return transport::json_response(200, "OK", R"({"status":"ok"})");
     });
@@ -38,6 +61,104 @@ void wire_routes(transport::HttpServer& server, const std::filesystem::path& rep
     server.route("GET", "/version", [](const transport::HttpRequest&) {
         return transport::json_response(
             200, "OK", std::string(R"({"version":")") + std::string(core::kVersion) + "\"}");
+    });
+
+    server.route("POST", "/users", [data_root](const transport::HttpRequest& request) {
+        try {
+            storage::AuthStore auth_store(data_root);
+            const std::string username = query_value(request, "username");
+            if (username.empty() || request.body.empty()) {
+                return transport::plain_text_response(400, "Bad Request", "username and a password body are required\n");
+            }
+            auth_store.create_user(username, request.body, now_unix());
+            return transport::json_response(200, "OK", "{\"username\":\"" + username + "\"}");
+        } catch (const core::ForgeError& e) {
+            return transport::plain_text_response(409, "Conflict", std::string(e.what()) + "\n");
+        }
+    });
+
+    server.route("POST", "/login", [data_root](const transport::HttpRequest& request) {
+        try {
+            storage::AuthStore auth_store(data_root);
+            const std::string username = query_value(request, "username");
+            const std::int64_t now = now_unix();
+            if (username.empty() || !auth_store.verify_user_password(username, request.body)) {
+                auth_store.audit_log().record(now, username.empty() ? "-" : username, "login_failed", "");
+                return transport::plain_text_response(401, "Unauthorized", "invalid credentials\n");
+            }
+            // 24-hour session, matching a typical web login lifetime;
+            // domain/token.hpp's TokenKind::PersonalAccessToken (issued
+            // separately, not over this endpoint) is the long-lived form.
+            constexpr std::int64_t kSessionTtlSeconds = 24 * 60 * 60;
+            const std::string token = auth_store.issue_token(username, domain::TokenKind::Session, kSessionTtlSeconds, now);
+            auth_store.audit_log().record(now, username, "login_succeeded", "");
+            return transport::json_response(200, "OK", "{\"token\":\"" + token + "\"}");
+        } catch (const core::ForgeError& e) {
+            return internal_error(e);
+        }
+    });
+
+    server.route("POST", "/ssh-keys", [data_root](const transport::HttpRequest& request) {
+        try {
+            storage::AuthStore auth_store(data_root);
+            const std::optional<std::string> username = authenticate(request, auth_store);
+            if (!username) {
+                return transport::plain_text_response(401, "Unauthorized", "a valid bearer token is required\n");
+            }
+            const std::optional<domain::SshPublicKey> key = domain::parse_ssh_public_key(request.body);
+            if (!key) {
+                return transport::plain_text_response(400, "Bad Request", "malformed SSH public key\n");
+            }
+            auth_store.add_ssh_key(*username, *key);
+            return transport::json_response(
+                200, "OK", "{\"fingerprint\":\"" + domain::fingerprint_ssh_public_key(*key) + "\"}");
+        } catch (const core::ForgeError& e) {
+            return internal_error(e);
+        }
+    });
+
+    server.route("POST", "/permissions", [repos_root, data_root](const transport::HttpRequest& request) {
+        try {
+            storage::AuthStore auth_store(data_root);
+            const std::optional<std::string> caller = authenticate(request, auth_store);
+            if (!caller) {
+                return transport::plain_text_response(401, "Unauthorized", "a valid bearer token is required\n");
+            }
+
+            const std::string repo_name = query_value(request, "repo");
+            const std::string target_username = query_value(request, "username");
+            const std::optional<domain::Role> role = domain::parse_role(query_value(request, "role"));
+            if (repo_name.empty() || target_username.empty() || !role) {
+                return transport::plain_text_response(
+                    400, "Bad Request", "repo, username, and a valid role are required\n");
+            }
+
+            const RepoRegistry registry(repos_root);
+            if (!registry.exists(repo_name)) {
+                return transport::plain_text_response(404, "Not Found", "no such repository\n");
+            }
+
+            // Bootstrapping: a repo with no permissions recorded yet is
+            // "legacy/open" (see the POST /object|/ref doc comments
+            // below) — its creator becomes Admin the moment anyone
+            // grants the first permission on it, since there's no
+            // caller to already hold Admin at that point. Once any
+            // permission exists, only an existing Admin may grant more.
+            if (auth_store.repo_has_any_permission(repo_name)) {
+                const std::optional<domain::Role> caller_role = auth_store.get_permission(repo_name, *caller);
+                if (!caller_role || !domain::role_satisfies(*caller_role, domain::Role::Admin)) {
+                    return transport::plain_text_response(403, "Forbidden", "admin access is required\n");
+                }
+            }
+
+            auth_store.set_permission(repo_name, target_username, *role, now_unix());
+            return transport::json_response(
+                200, "OK",
+                "{\"repo\":\"" + repo_name + "\",\"username\":\"" + target_username + "\",\"role\":\"" +
+                    std::string(domain::role_to_string(*role)) + "\"}");
+        } catch (const core::ForgeError& e) {
+            return internal_error(e);
+        }
     });
 
     server.route("GET", "/refs", [repos_root](const transport::HttpRequest& request) {
@@ -93,19 +214,34 @@ void wire_routes(transport::HttpServer& server, const std::filesystem::path& rep
         }
     });
 
-    server.route("POST", "/object", [repos_root](const transport::HttpRequest& request) {
+    server.route("POST", "/object", [repos_root, data_root](const transport::HttpRequest& request) {
         try {
             RepoRegistry registry(repos_root);
             const std::string repo_name = query_value(request, "repo");
             if (repo_name.empty()) {
                 return transport::plain_text_response(400, "Bad Request", "repo is required\n");
             }
-            // "Push to create" (see server/repo_registry.hpp): a client
-            // pushing to a brand-new repo uploads objects before POST
-            // /ref ever runs, so this needs the same auto-create GET
-            // /refs deliberately does *not* do (a GET must stay free of
-            // side effects).
-            registry.ensure_exists(repo_name);
+            // A repo that already has at least one recorded permission
+            // is access-controlled: writing to it needs Write (or
+            // better). A repo with none recorded is "legacy/open" — the
+            // model every repo created before Phase 14's endpoints
+            // existed (and any anonymous "push to create" today) is
+            // in — so this stays backward compatible with Phase 13's
+            // clone/fetch/push instead of retroactively locking out
+            // every existing repository.
+            if (registry.exists(repo_name)) {
+                storage::AuthStore auth_store(data_root);
+                if (auth_store.repo_has_any_permission(repo_name)) {
+                    const std::optional<std::string> username = authenticate(request, auth_store);
+                    const std::optional<domain::Role> role =
+                        username ? auth_store.get_permission(repo_name, *username) : std::nullopt;
+                    if (!role || !domain::role_satisfies(*role, domain::Role::Write)) {
+                        return transport::plain_text_response(403, "Forbidden", "write access is required\n");
+                    }
+                }
+            }
+            registry.ensure_exists(repo_name); // "push to create" for a genuinely new repo
+
             const std::optional<core::DecodedObject> decoded = core::decode_canonical_object(request.body);
             if (!decoded) {
                 return transport::plain_text_response(400, "Bad Request", "malformed object\n");
@@ -121,13 +257,31 @@ void wire_routes(transport::HttpServer& server, const std::filesystem::path& rep
         }
     });
 
-    server.route("POST", "/ref", [repos_root](const transport::HttpRequest& request) {
+    server.route("POST", "/ref", [repos_root, data_root](const transport::HttpRequest& request) {
         try {
             RepoRegistry registry(repos_root);
             const std::string repo_name = query_value(request, "repo");
             const std::string branch_name = query_value(request, "branch");
             if (repo_name.empty() || branch_name.empty()) {
                 return transport::plain_text_response(400, "Bad Request", "repo and branch are required\n");
+            }
+
+            const bool repo_existed_already = registry.exists(repo_name);
+            std::optional<std::string> authenticated_username;
+            if (repo_existed_already) {
+                storage::AuthStore auth_store(data_root);
+                if (auth_store.repo_has_any_permission(repo_name)) {
+                    authenticated_username = authenticate(request, auth_store);
+                    const std::optional<domain::Role> role = authenticated_username
+                                                                   ? auth_store.get_permission(repo_name, *authenticated_username)
+                                                                   : std::nullopt;
+                    if (!role || !domain::role_satisfies(*role, domain::Role::Write)) {
+                        return transport::plain_text_response(403, "Forbidden", "write access is required\n");
+                    }
+                }
+            } else {
+                storage::AuthStore new_repo_auth_store(data_root);
+                authenticated_username = authenticate(request, new_repo_auth_store);
             }
             registry.ensure_exists(repo_name); // "push to create", the common hosting convention
 
@@ -178,6 +332,15 @@ void wire_routes(transport::HttpServer& server, const std::filesystem::path& rep
                 // `current` and this update.
                 return transport::plain_text_response(
                     409, "Conflict", "ref changed concurrently; fetch and try again\n");
+            }
+
+            if (!repo_existed_already && authenticated_username) {
+                // Bootstrap: whoever authenticated for the push that
+                // created this repository becomes its Admin — otherwise
+                // no one could ever pass the Admin check POST
+                // /permissions needs to grant anyone else access.
+                storage::AuthStore auth_store(data_root);
+                auth_store.set_permission(repo_name, *authenticated_username, domain::Role::Admin, now_unix());
             }
 
             return transport::json_response(

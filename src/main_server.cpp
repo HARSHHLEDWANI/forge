@@ -14,6 +14,7 @@ struct ServerArgs {
     std::string bind_address = "0.0.0.0";
     std::uint16_t port = 8080;
     std::filesystem::path repos_root = "forge-repos";
+    std::filesystem::path data_root = "forge-data";
 };
 
 ServerArgs parse_server_args(const std::vector<std::string>& args) {
@@ -25,6 +26,8 @@ ServerArgs parse_server_args(const std::vector<std::string>& args) {
             result.bind_address = args[++i];
         } else if (args[i] == "--repos-dir" && i + 1 < args.size()) {
             result.repos_root = args[++i];
+        } else if (args[i] == "--data-dir" && i + 1 < args.size()) {
+            result.data_root = args[++i];
         }
     }
     return result;
@@ -36,9 +39,10 @@ int main(int argc, char** argv) {
     const std::vector<std::string> args(argv + 1, argv + argc);
     const ServerArgs parsed = parse_server_args(args);
     std::filesystem::create_directories(parsed.repos_root);
+    std::filesystem::create_directories(parsed.data_root);
 
     forge::transport::HttpServer http_server(parsed.bind_address, parsed.port);
-    forge::server::wire_routes(http_server, parsed.repos_root);
+    forge::server::wire_routes(http_server, parsed.repos_root, parsed.data_root);
 
     try {
         http_server.start();

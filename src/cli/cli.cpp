@@ -9,6 +9,7 @@
 #include <iostream>
 #include <sstream>
 
+#include "core/backup.hpp"
 #include "core/branching.hpp"
 #include "core/checkout.hpp"
 #include "core/commit.hpp"
@@ -54,6 +55,8 @@ const std::vector<CommandSpec>& registry_table() {
         {"clone", "<url> [path]", "Clone a remote repository", false},
         {"fetch", "<url>", "Download objects and refs from a remote", false},
         {"push", "<url> [branch] [--force]", "Upload a branch to a remote", true},
+        {"backup", "<destination>", "Back up every branch and object to a directory", false},
+        {"restore", "<backup-dir> <target-dir>", "Restore a backup into a fresh repository", false},
         {"completion", "<shell>", "Print a shell completion script", false},
         {"help", "[command]", "Show this help message, or one command's details", false},
         {"version", "", "Print the Forge version", false},
@@ -197,6 +200,8 @@ std::string_view next_hint(Command command) {
         case Command::Clone: return "'log' to see what came over, or 'status'.";
         case Command::Fetch: return "'merge <commit>' to bring fetched history into your branch.";
         case Command::Push: return "'log' to confirm what landed on the remote.";
+        case Command::Backup: return "'verify' to double-check the source repository is healthy too.";
+        case Command::Restore: return "'log' and 'status' to confirm the restored repository looks right.";
         default: return "";
     }
 }
@@ -411,6 +416,23 @@ ParseResult parse_args(const std::vector<std::string>& args) {
             } else if (result.push_branch.empty()) {
                 result.push_branch = args[i];
             }
+        }
+        return result;
+    }
+    if (first == "backup") {
+        result.command = Command::Backup;
+        if (args.size() >= 2) {
+            result.backup_destination = args[1];
+        }
+        return result;
+    }
+    if (first == "restore") {
+        result.command = Command::Restore;
+        if (args.size() >= 2) {
+            result.restore_source = args[1];
+        }
+        if (args.size() >= 3) {
+            result.restore_target = args[2];
         }
         return result;
     }
@@ -902,6 +924,45 @@ int execute_command(const ParseResult& result, std::ostream& out, std::ostream& 
                 const core::PushResult push_result = core::push(objects, refs, *remote, branch, result.push_force);
                 out << "Pushed " << push_result.objects_uploaded << " object(s); " << branch << " is now at "
                     << push_result.commit_id.to_hex().substr(0, 12) << " on " << result.push_url << '\n';
+                return 0;
+            } catch (const core::ForgeError& e) {
+                err << "forge: " << e.what() << '\n';
+                return 1;
+            }
+        }
+        case Command::Backup: {
+            if (result.backup_destination.empty()) {
+                err << "forge: a backup destination is required\n";
+                return 1;
+            }
+            try {
+                const std::optional<RepoContext> ctx = discover_repo_context(err);
+                if (!ctx) {
+                    return 1;
+                }
+                const storage::RepositoryConfig config = storage::load_config(ctx->forge_dir);
+                storage::ObjectStore objects(config.storage_root);
+                storage::RefStore refs(ctx->forge_dir);
+
+                const core::BackupResult backup_result = core::create_backup(objects, refs, result.backup_destination);
+                out << "Backed up to " << result.backup_destination << ": " << backup_result.objects_copied
+                    << " object(s) copied, " << backup_result.objects_already_present << " already present\n";
+                return 0;
+            } catch (const core::ForgeError& e) {
+                err << "forge: " << e.what() << '\n';
+                return 1;
+            }
+        }
+        case Command::Restore: {
+            if (result.restore_source.empty() || result.restore_target.empty()) {
+                err << "forge: a backup directory and a target directory are required\n";
+                return 1;
+            }
+            try {
+                const storage::InitResult init_result = core::restore_backup(result.restore_source, result.restore_target);
+                const std::filesystem::path absolute_dir =
+                    std::filesystem::absolute(init_result.forge_dir.parent_path()).lexically_normal();
+                out << "Restored into " << absolute_dir.string() << '\n';
                 return 0;
             } catch (const core::ForgeError& e) {
                 err << "forge: " << e.what() << '\n';

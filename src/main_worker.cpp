@@ -9,6 +9,7 @@
 #include <thread>
 #include <vector>
 
+#include "core/backup.hpp"
 #include "core/error.hpp"
 #include "core/verify.hpp"
 #include "server/repo_registry.hpp"
@@ -30,6 +31,7 @@ void handle_signal(int) { g_shutdown_requested.store(true); }
 struct WorkerArgs {
     std::string database_url;
     std::filesystem::path repos_root = "forge-repos";
+    std::filesystem::path backups_root = "forge-backups";
     std::size_t thread_count = 2;
 };
 
@@ -40,6 +42,8 @@ WorkerArgs parse_worker_args(const std::vector<std::string>& args) {
             result.database_url = args[++i];
         } else if (args[i] == "--repos-dir" && i + 1 < args.size()) {
             result.repos_root = args[++i];
+        } else if (args[i] == "--backups-dir" && i + 1 < args.size()) {
+            result.backups_root = args[++i];
         } else if (args[i] == "--threads" && i + 1 < args.size()) {
             result.thread_count = static_cast<std::size_t>(std::stoul(args[++i]));
         }
@@ -73,6 +77,27 @@ void handle_verify_job(const forge::database::DbJob& job, const std::filesystem:
     }
 }
 
+// The "backup" job kind: runs core::create_backup (Phase 18) for the
+// repository named by the job's payload, into
+// `<backups_root>/<payload>/` — a fixed, single destination per repo,
+// so re-running the same job (a retry, or a later scheduled backup) is
+// exactly the incremental, resumable update create_backup() already
+// documents, not a fresh full copy each time.
+void handle_backup_job(
+    const forge::database::DbJob& job, const std::filesystem::path& repos_root,
+    const std::filesystem::path& backups_root) {
+    const forge::server::RepoRegistry registry(repos_root);
+    if (!registry.exists(job.payload)) {
+        throw forge::core::ForgeError("no such repository: " + job.payload);
+    }
+    const std::filesystem::path forge_dir = registry.forge_dir_for(job.payload);
+    const forge::storage::RepositoryConfig config = forge::storage::load_config(forge_dir);
+    const forge::storage::ObjectStore objects(config.storage_root);
+    const forge::storage::RefStore refs(forge_dir);
+
+    forge::core::create_backup(objects, refs, backups_root / job.payload);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -90,6 +115,10 @@ int main(int argc, char** argv) {
     pool.register_handler("verify", [repos_root = parsed.repos_root](const forge::database::DbJob& job) {
         handle_verify_job(job, repos_root);
     });
+    pool.register_handler(
+        "backup", [repos_root = parsed.repos_root, backups_root = parsed.backups_root](const forge::database::DbJob& job) {
+            handle_backup_job(job, repos_root, backups_root);
+        });
 
     std::cout << "forge-worker starting with " << parsed.thread_count << " thread(s)\n";
     pool.start();

@@ -41,6 +41,7 @@ add_library(forge_core STATIC
   src/core/remote_protocol.cpp
   src/core/remote.cpp
   src/core/base64.cpp
+  src/core/backup.cpp
   src/cli/cli.cpp
   src/storage/safe_path.cpp
   src/storage/atomic_file.cpp

@@ -10,7 +10,7 @@ namespace forge::cli {
 
 enum class Command {
     Help, Version, Init, Add, Commit, Log, Branch, Switch, Checkout, Status, Diff, Merge, Completion, Verify,
-    Clone, Fetch, Push, Unknown
+    Clone, Fetch, Push, Backup, Restore, Unknown
 };
 
 struct ParseResult {
@@ -59,6 +59,11 @@ struct ParseResult {
     std::string push_branch;
     // Populated only when command == Push; true if "--force" was given.
     bool push_force = false;
+    // Populated only when command == Backup; empty is a usage error.
+    std::string backup_destination;
+    // Populated only when command == Restore; both empty is a usage error.
+    std::string restore_source;
+    std::string restore_target;
 };
 
 // Pure and side-effect free so it is easy to unit test independently of

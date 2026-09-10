@@ -17,6 +17,9 @@
 #include <sstream>
 #include <vector>
 
+#include <cstdlib>
+#include <thread>
+
 #include "core/blob.hpp"
 #include "core/branching.hpp"
 #include "core/checkout.hpp"
@@ -26,10 +29,14 @@
 #include "core/staging.hpp"
 #include "core/tree_builder.hpp"
 #include "core/verify.hpp"
+#include "database/postgres_connection.hpp"
+#include "server/app.hpp"
 #include "storage/index_store.hpp"
 #include "storage/object_store.hpp"
 #include "storage/ref_store.hpp"
 #include "storage/repository.hpp"
+#include "transport/http_client.hpp"
+#include "transport/http_server.hpp"
 
 namespace {
 
@@ -208,10 +215,83 @@ void bench_commit_and_verify(int file_count) {
     std::filesystem::remove_all(repo_root);
 }
 
+// Phase 20 ("Only after measurement: caching, Redis, separate object
+// storage, replication, horizontal scaling, consensus"): the concrete
+// question that scope raises for *this* codebase specifically is
+// whether HttpServer's single-threaded accept loop (a deliberate Phase
+// 12 choice — see transport/http_server.hpp) is actually a bottleneck
+// for how this tool is used. Measures sequential request throughput
+// against a real running server — the honest ceiling of "one request at
+// a time, no concurrency" as it exists today.
+void bench_http_server_throughput(int request_count) {
+    std::cout << "\n--- HTTP server throughput: " << request_count << " sequential GET /healthz ---\n";
+
+    forge::transport::HttpServer server("127.0.0.1", 0);
+    server.route("GET", "/healthz", [](const forge::transport::HttpRequest&) {
+        return forge::transport::json_response(200, "OK", R"({"status":"ok"})");
+    });
+    server.start();
+    std::thread server_thread([&server] { server.serve(); });
+
+    forge::transport::HttpClientRequest request;
+    request.method = "GET";
+    request.path = "/healthz";
+
+    const Clock::time_point start = Clock::now();
+    for (int i = 0; i < request_count; ++i) {
+        forge::transport::send_http_request("127.0.0.1", server.port(), request);
+    }
+    const double elapsed = seconds_since(start);
+
+    server.stop();
+    server_thread.join();
+
+    print_row("Sequential throughput", request_count / elapsed, "requests/sec");
+    print_row("Mean request latency", 1000.0 * elapsed / request_count, "ms");
+}
+
+// The collaboration API (server/collaboration_routes.cpp) opens a fresh
+// PostgresConnection — a new TCP connection plus a new Postgres auth
+// handshake — for every single HTTP request, rather than reusing one.
+// Quantifies exactly what that costs versus running the same query on
+// an already-open connection, so "should this be a persistent
+// connection instead" has real numbers behind it instead of a guess.
+// Only runs if FORGE_BENCH_DATABASE_URL is set — unlike the
+// object-store benchmarks above, this one needs a live PostgreSQL to
+// mean anything.
+void bench_postgres_connection_overhead(int iterations) {
+    const char* url = std::getenv("FORGE_BENCH_DATABASE_URL");
+    if (url == nullptr || *url == '\0') {
+        std::cout << "\n--- Postgres connection overhead: skipped (FORGE_BENCH_DATABASE_URL not set) ---\n";
+        return;
+    }
+    std::cout << "\n--- Postgres connection overhead: " << iterations << " iterations ---\n";
+
+    const Clock::time_point connect_start = Clock::now();
+    for (int i = 0; i < iterations; ++i) {
+        forge::database::PostgresConnection connection(url);
+        connection.exec("SELECT 1");
+    }
+    const double connect_and_query_seconds = seconds_since(connect_start);
+
+    forge::database::PostgresConnection persistent(url);
+    const Clock::time_point query_start = Clock::now();
+    for (int i = 0; i < iterations; ++i) {
+        persistent.exec("SELECT 1");
+    }
+    const double query_only_seconds = seconds_since(query_start);
+
+    print_row("New connection + query", 1000.0 * connect_and_query_seconds / iterations, "ms/request");
+    print_row("Query on a reused connection", 1000.0 * query_only_seconds / iterations, "ms/request");
+    print_row(
+        "Connection setup overhead", 1000.0 * (connect_and_query_seconds - query_only_seconds) / iterations,
+        "ms/request");
+}
+
 } // namespace
 
 int main() {
-    std::cout << "forge-bench: measuring real performance before Phase 19 optimizes anything\n";
+    std::cout << "forge-bench: measuring real performance before Phases 19-20 optimize anything\n";
 
     bench_object_store_throughput(100, 2000);     // small objects: commit messages, short files
     bench_object_store_throughput(10 * 1024, 500); // medium: typical source files
@@ -220,6 +300,10 @@ int main() {
     bench_shard_distribution(5000);
     bench_commit_and_verify(2000);
 
-    std::cout << "\nDone. See docs/adr/0005-storage-optimization-deferred.md for what these numbers mean.\n";
+    bench_http_server_throughput(500);
+    bench_postgres_connection_overhead(200);
+
+    std::cout << "\nDone. See docs/adr/0005-storage-optimization-deferred.md and "
+                 "docs/adr/0006-scale-deferred.md for what these numbers mean.\n";
     return 0;
 }

@@ -42,6 +42,9 @@ add_executable(forge_unit_tests
   unit/postgres_connection_tests.cpp
   unit/migrations_tests.cpp
   unit/repository_directory_tests.cpp
+  unit/collaboration_directory_tests.cpp
+  unit/merge_in_object_store_tests.cpp
+  unit/server_collaboration_tests.cpp
 )
 target_include_directories(forge_unit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 find_package(Threads REQUIRED)

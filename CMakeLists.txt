@@ -86,6 +86,10 @@ add_executable(forge-server src/main_server.cpp)
 target_link_libraries(forge-server PRIVATE forge_core)
 forge_apply_warnings(forge-server)
 
+add_executable(forge-bench src/main_bench.cpp)
+target_link_libraries(forge-bench PRIVATE forge_core)
+forge_apply_warnings(forge-bench)
+
 add_executable(forge-worker src/main_worker.cpp)
 target_link_libraries(forge-worker PRIVATE forge_core)
 if(NOT WIN32)

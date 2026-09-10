@@ -102,4 +102,34 @@ core::Commit ObjectStore::get_commit(const core::ObjectId& id) const {
     return *decoded;
 }
 
+ObjectStoreScan ObjectStore::scan() const {
+    ObjectStoreScan result;
+    std::error_code exists_ec;
+    if (!std::filesystem::exists(root_, exists_ec)) {
+        return result;
+    }
+
+    for (const auto& shard : std::filesystem::directory_iterator(root_)) {
+        const std::string shard_name = shard.path().filename().string();
+        if (!shard.is_directory() || shard_name.size() != 2) {
+            result.unexpected_files.push_back(shard.path());
+            continue;
+        }
+        for (const auto& file : std::filesystem::directory_iterator(shard.path())) {
+            if (!file.is_regular_file()) {
+                result.unexpected_files.push_back(file.path());
+                continue;
+            }
+            const std::optional<core::ObjectId> id =
+                core::ObjectId::parse(shard_name + file.path().filename().string());
+            if (id) {
+                result.object_ids.push_back(*id);
+            } else {
+                result.unexpected_files.push_back(file.path());
+            }
+        }
+    }
+    return result;
+}
+
 } // namespace forge::storage

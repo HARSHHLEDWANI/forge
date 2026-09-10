@@ -20,10 +20,12 @@
 #include "core/merge.hpp"
 #include "core/staging.hpp"
 #include "core/tree_builder.hpp"
+#include "core/verify.hpp"
 #include "core/version.hpp"
 #include "storage/index_store.hpp"
 #include "storage/object_store.hpp"
 #include "storage/ref_store.hpp"
+#include "storage/repo_lock.hpp"
 #include "storage/repository.hpp"
 
 namespace forge::cli {
@@ -47,6 +49,7 @@ const std::vector<CommandSpec>& registry_table() {
         {"status", "", "Show staged, unstaged, and untracked changes", false},
         {"diff", "", "Show unstaged changes, line by line", false},
         {"merge", "<ref> [-m <msg>]", "Merge a branch or commit into the current branch", true},
+        {"verify", "", "Check object integrity and repository health", false},
         {"completion", "<shell>", "Print a shell completion script", false},
         {"help", "[command]", "Show this help message, or one command's details", false},
         {"version", "", "Print the Forge version", false},
@@ -238,6 +241,19 @@ std::string resolve_author(const storage::RepositoryConfig& config) {
     return name + " <" + email + ">";
 }
 
+// Acquires the whole-repository lock (storage/repo_lock.hpp) for a
+// state-mutating command, printing a note if doing so had to clear a
+// stale lock left by a crashed process — a small courtesy on top of the
+// self-recovery RepoLock already does on its own (cli.md's
+// "diagnostics").
+storage::RepoLock acquire_lock(const RepoContext& ctx, std::ostream& out) {
+    storage::RepoLock lock(ctx.forge_dir);
+    if (lock.recovered_stale_pid) {
+        out << "note: cleared a stale lock left by process " << *lock.recovered_stale_pid << "\n";
+    }
+    return lock;
+}
+
 std::string_view status_word(core::ChangeType type) {
     switch (type) {
         case core::ChangeType::Added: return "new file";
@@ -338,6 +354,10 @@ ParseResult parse_args(const std::vector<std::string>& args) {
         result.command = Command::Diff;
         return result;
     }
+    if (first == "verify") {
+        result.command = Command::Verify;
+        return result;
+    }
     if (first == "merge") {
         result.command = Command::Merge;
         for (std::size_t i = 1; i < args.size(); ++i) {
@@ -418,6 +438,7 @@ int execute_command(const ParseResult& result, std::ostream& out, std::ostream& 
                 if (!ctx) {
                     return 1;
                 }
+                const storage::RepoLock lock = acquire_lock(*ctx, out);
                 const storage::RepositoryConfig config = storage::load_config(ctx->forge_dir);
 
                 storage::ObjectStore objects(config.storage_root);
@@ -448,6 +469,7 @@ int execute_command(const ParseResult& result, std::ostream& out, std::ostream& 
                 if (!ctx) {
                     return 1;
                 }
+                const storage::RepoLock lock = acquire_lock(*ctx, out);
                 const storage::RepositoryConfig config = storage::load_config(ctx->forge_dir);
 
                 storage::ObjectStore objects(config.storage_root);
@@ -512,6 +534,7 @@ int execute_command(const ParseResult& result, std::ostream& out, std::ostream& 
                     return 0;
                 }
 
+                const storage::RepoLock lock = acquire_lock(*ctx, out);
                 core::create_branch(refs, result.branch_name);
                 return 0;
             } catch (const core::ForgeError& e) {
@@ -529,6 +552,7 @@ int execute_command(const ParseResult& result, std::ostream& out, std::ostream& 
                 if (!ctx) {
                     return 1;
                 }
+                const storage::RepoLock lock = acquire_lock(*ctx, out);
                 const storage::RepositoryConfig config = storage::load_config(ctx->forge_dir);
 
                 storage::ObjectStore objects(config.storage_root);
@@ -560,6 +584,7 @@ int execute_command(const ParseResult& result, std::ostream& out, std::ostream& 
                 if (!ctx) {
                     return 1;
                 }
+                const storage::RepoLock lock = acquire_lock(*ctx, out);
                 const storage::RepositoryConfig config = storage::load_config(ctx->forge_dir);
 
                 storage::ObjectStore objects(config.storage_root);
@@ -661,6 +686,7 @@ int execute_command(const ParseResult& result, std::ostream& out, std::ostream& 
                 if (!ctx) {
                     return 1;
                 }
+                const storage::RepoLock lock = acquire_lock(*ctx, out);
                 const storage::RepositoryConfig config = storage::load_config(ctx->forge_dir);
 
                 storage::ObjectStore objects(config.storage_root);
@@ -700,6 +726,49 @@ int execute_command(const ParseResult& result, std::ostream& out, std::ostream& 
                         return 1;
                 }
                 return 1;
+            } catch (const core::ForgeError& e) {
+                err << "forge: " << e.what() << '\n';
+                return 1;
+            }
+        }
+        case Command::Verify: {
+            try {
+                const std::optional<RepoContext> ctx = discover_repo_context(err);
+                if (!ctx) {
+                    return 1;
+                }
+                const storage::RepositoryConfig config = storage::load_config(ctx->forge_dir);
+
+                storage::ObjectStore objects(config.storage_root);
+                storage::RefStore refs(ctx->forge_dir);
+
+                const core::VerifyReport report = core::verify_repository(objects, refs);
+
+                out << "Checked " << report.objects_checked << " object(s) across " << refs.list_branches().size()
+                    << " branch(es).\n";
+                if (!report.corrupt_objects.empty()) {
+                    out << "\n" << report.corrupt_objects.size() << " corrupt object(s):\n";
+                    for (const std::string& issue : report.corrupt_objects) {
+                        out << "  " << issue << '\n';
+                    }
+                }
+                if (!report.missing_objects.empty()) {
+                    out << "\n" << report.missing_objects.size() << " missing object(s):\n";
+                    for (const std::string& issue : report.missing_objects) {
+                        out << "  " << issue << '\n';
+                    }
+                }
+                if (!report.orphaned_files.empty()) {
+                    out << "\n" << report.orphaned_files.size()
+                        << " orphaned temp file(s) left by an interrupted write (harmless; safe to delete):\n";
+                    for (const std::filesystem::path& path : report.orphaned_files) {
+                        out << "  " << path.string() << '\n';
+                    }
+                }
+                if (report.ok()) {
+                    out << "\nRepository is healthy.\n";
+                }
+                return report.ok() ? 0 : 1;
             } catch (const core::ForgeError& e) {
                 err << "forge: " << e.what() << '\n';
                 return 1;

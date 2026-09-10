@@ -36,6 +36,7 @@ add_library(forge_core STATIC
   src/core/checkout.cpp
   src/core/diff.cpp
   src/core/merge.cpp
+  src/core/verify.cpp
   src/cli/cli.cpp
   src/storage/safe_path.cpp
   src/storage/atomic_file.cpp
@@ -43,6 +44,7 @@ add_library(forge_core STATIC
   src/storage/object_store.cpp
   src/storage/index_store.cpp
   src/storage/ref_store.cpp
+  src/storage/repo_lock.cpp
 )
 target_include_directories(forge_core PUBLIC src)
 target_link_libraries(forge_core PRIVATE OpenSSL::Crypto)

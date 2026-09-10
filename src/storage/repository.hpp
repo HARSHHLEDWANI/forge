@@ -11,6 +11,7 @@ inline constexpr std::string_view kConfigFileName = "config";
 inline constexpr std::string_view kIndexFileName = "index";
 inline constexpr std::string_view kIgnoreFileName = ".forgeignore";
 inline constexpr std::string_view kHeadFileName = "HEAD";
+inline constexpr std::string_view kLockFileName = "repo.lock";
 inline constexpr std::string_view kRefsHeadsDirName = "refs/heads";
 inline constexpr std::string_view kDefaultBranchName = "main";
 

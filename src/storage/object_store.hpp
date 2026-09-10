@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "core/blob.hpp"
 #include "core/commit.hpp"
@@ -14,6 +15,17 @@ namespace forge::storage {
 struct StoredObject {
     std::string type;
     std::string payload;
+};
+
+struct ObjectStoreScan {
+    std::vector<core::ObjectId> object_ids;
+    // Anything physically present under the store's root that isn't a
+    // validly-shaped object path (two-hex-char shard directory holding a
+    // 62-hex-char file). In practice this can only be a write_file_atomic
+    // temp file (see atomic_file.hpp) orphaned by a process that crashed
+    // between creating it and renaming it into place — the store never
+    // contains anything else by construction.
+    std::vector<std::filesystem::path> unexpected_files;
 };
 
 // Content-addressed loose-object store: one file per object, laid out as
@@ -60,6 +72,13 @@ public:
     // instead of leaving decode_commit's nullopt for the caller to handle.
     core::ObjectId put_commit(const core::Commit& commit);
     core::Commit get_commit(const core::ObjectId& id) const;
+
+    // Enumerates everything physically present in the store, classifying
+    // each entry as a well-formed object id or an unexpected file. Used
+    // by core::verify_repository (Phase 11) — not part of normal
+    // read/write operation, so it's the one method here that walks the
+    // whole store rather than addressing a single object.
+    ObjectStoreScan scan() const;
 
 private:
     std::filesystem::path root_;

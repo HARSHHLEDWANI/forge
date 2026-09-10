@@ -9,7 +9,7 @@
 namespace forge::cli {
 
 enum class Command {
-    Help, Version, Init, Add, Commit, Log, Branch, Switch, Checkout, Status, Diff, Merge, Completion, Unknown
+    Help, Version, Init, Add, Commit, Log, Branch, Switch, Checkout, Status, Diff, Merge, Completion, Verify, Unknown
 };
 
 struct ParseResult {

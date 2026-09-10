@@ -9,7 +9,9 @@
 
 #if defined(_WIN32)
 #include <io.h>
+#include <windows.h>
 #else
+#include <fcntl.h>
 #include <unistd.h>
 #endif
 
@@ -28,6 +30,40 @@ void sync_file_handle(std::FILE* file) {
     if (result != 0) {
         throw core::ForgeError("failed to sync file to disk");
     }
+}
+
+// Durability against real power loss (as opposed to a process crash)
+// needs the rename itself to survive too, which means syncing the
+// directory entry, not just the file's own bytes — a renamed-but-not-
+// yet-durable directory entry can still revert to the old state after a
+// crash even though the file content sync above succeeded.
+void sync_directory(const std::filesystem::path& dir) {
+#if defined(_WIN32)
+    // FILE_FLAG_BACKUP_SEMANTICS is what lets CreateFile open a
+    // directory at all; FlushFileBuffers on the resulting handle has
+    // flushed directory metadata on NTFS since Windows Vista.
+    const HANDLE handle = CreateFileW(
+        dir.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) {
+        throw core::ForgeError("failed to open directory for sync: " + dir.string());
+    }
+    const BOOL ok = FlushFileBuffers(handle);
+    CloseHandle(handle);
+    if (!ok) {
+        throw core::ForgeError("failed to sync directory: " + dir.string());
+    }
+#else
+    const int fd = open(dir.c_str(), O_RDONLY);
+    if (fd < 0) {
+        throw core::ForgeError("failed to open directory for sync: " + dir.string());
+    }
+    const int result = fsync(fd);
+    close(fd);
+    if (result != 0) {
+        throw core::ForgeError("failed to sync directory: " + dir.string());
+    }
+#endif
 }
 
 std::filesystem::path make_temp_path(const std::filesystem::path& target) {
@@ -100,6 +136,7 @@ void write_file_atomic(const std::filesystem::path& target, std::string_view dat
     }
 
     guard.released = true; // rename succeeded: nothing left to clean up
+    sync_directory(target.parent_path());
 }
 
 } // namespace forge::storage

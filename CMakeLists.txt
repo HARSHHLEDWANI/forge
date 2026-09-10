@@ -37,6 +37,8 @@ add_library(forge_core STATIC
   src/core/diff.cpp
   src/core/merge.cpp
   src/core/verify.cpp
+  src/core/remote_protocol.cpp
+  src/core/remote.cpp
   src/cli/cli.cpp
   src/storage/safe_path.cpp
   src/storage/atomic_file.cpp
@@ -45,14 +47,28 @@ add_library(forge_core STATIC
   src/storage/index_store.cpp
   src/storage/ref_store.cpp
   src/storage/repo_lock.cpp
+  src/transport/socket_compat.cpp
+  src/transport/http_message.cpp
+  src/transport/http_parser.cpp
+  src/transport/http_server.cpp
+  src/transport/http_client.cpp
+  src/server/app.cpp
+  src/server/repo_registry.cpp
 )
 target_include_directories(forge_core PUBLIC src)
 target_link_libraries(forge_core PRIVATE OpenSSL::Crypto)
+if(WIN32)
+  target_link_libraries(forge_core PRIVATE ws2_32)
+endif()
 forge_apply_warnings(forge_core)
 
 add_executable(forge src/main.cpp)
 target_link_libraries(forge PRIVATE forge_core)
 forge_apply_warnings(forge)
+
+add_executable(forge-server src/main_server.cpp)
+target_link_libraries(forge-server PRIVATE forge_core)
+forge_apply_warnings(forge-server)
 
 enable_testing()
 add_subdirectory(tests)

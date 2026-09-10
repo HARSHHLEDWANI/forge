@@ -9,7 +9,8 @@
 namespace forge::cli {
 
 enum class Command {
-    Help, Version, Init, Add, Commit, Log, Branch, Switch, Checkout, Status, Diff, Merge, Completion, Verify, Unknown
+    Help, Version, Init, Add, Commit, Log, Branch, Switch, Checkout, Status, Diff, Merge, Completion, Verify,
+    Clone, Fetch, Push, Unknown
 };
 
 struct ParseResult {
@@ -44,6 +45,20 @@ struct ParseResult {
     // Populated only when command == Completion; the shell to generate a
     // completion script for (currently only "bash" is supported).
     std::string completion_shell;
+    // Populated only when command == Clone; empty is a usage error.
+    std::string clone_url;
+    // Populated only when command == Clone; empty means "derive it from
+    // the remote URL's repo name", matching `git clone <url>`.
+    std::string clone_target;
+    // Populated only when command == Fetch; empty is a usage error.
+    std::string fetch_url;
+    // Populated only when command == Push; empty is a usage error.
+    std::string push_url;
+    // Populated only when command == Push; empty means "push HEAD's
+    // current branch".
+    std::string push_branch;
+    // Populated only when command == Push; true if "--force" was given.
+    bool push_force = false;
 };
 
 // Pure and side-effect free so it is easy to unit test independently of

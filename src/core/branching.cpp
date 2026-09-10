@@ -16,6 +16,17 @@ void validate_branch_name(std::string_view name) {
     if (name.find('/') != std::string_view::npos) {
         throw ForgeError("branch name must not contain '/': " + std::string(name));
     }
+    // Rejected so a branch name can always be embedded in the remote
+    // protocol's JSON bodies (see core/remote_protocol.hpp) and in a URL
+    // query string (see transport/http_parser.hpp's parse_query_string)
+    // without ever needing to escape or decode anything — simpler and
+    // safer than allowing these and then having to get JSON-escaping
+    // exactly right on every encode path.
+    for (const char c : name) {
+        if (c == '"' || c == '\\' || c == '&' || c == '=' || static_cast<unsigned char>(c) < 0x20) {
+            throw ForgeError("branch name contains an unsupported character: " + std::string(name));
+        }
+    }
 }
 
 } // namespace

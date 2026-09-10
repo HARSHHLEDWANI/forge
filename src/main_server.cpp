@@ -1,0 +1,53 @@
+#include <cstdint>
+#include <filesystem>
+#include <iostream>
+#include <string>
+#include <vector>
+
+#include "core/error.hpp"
+#include "server/app.hpp"
+#include "transport/http_server.hpp"
+
+namespace {
+
+struct ServerArgs {
+    std::string bind_address = "0.0.0.0";
+    std::uint16_t port = 8080;
+    std::filesystem::path repos_root = "forge-repos";
+};
+
+ServerArgs parse_server_args(const std::vector<std::string>& args) {
+    ServerArgs result;
+    for (std::size_t i = 0; i < args.size(); ++i) {
+        if (args[i] == "--port" && i + 1 < args.size()) {
+            result.port = static_cast<std::uint16_t>(std::stoi(args[++i]));
+        } else if (args[i] == "--bind" && i + 1 < args.size()) {
+            result.bind_address = args[++i];
+        } else if (args[i] == "--repos-dir" && i + 1 < args.size()) {
+            result.repos_root = args[++i];
+        }
+    }
+    return result;
+}
+
+} // namespace
+
+int main(int argc, char** argv) {
+    const std::vector<std::string> args(argv + 1, argv + argc);
+    const ServerArgs parsed = parse_server_args(args);
+    std::filesystem::create_directories(parsed.repos_root);
+
+    forge::transport::HttpServer http_server(parsed.bind_address, parsed.port);
+    forge::server::wire_routes(http_server, parsed.repos_root);
+
+    try {
+        http_server.start();
+    } catch (const forge::core::ForgeError& e) {
+        std::cerr << "forge-server: " << e.what() << '\n';
+        return 1;
+    }
+
+    std::cout << "forge-server listening on " << parsed.bind_address << ":" << http_server.port() << '\n';
+    http_server.serve();
+    return 0;
+}

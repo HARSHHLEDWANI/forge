@@ -18,6 +18,7 @@
 #include "core/ignore_rules.hpp"
 #include "core/log.hpp"
 #include "core/merge.hpp"
+#include "core/remote.hpp"
 #include "core/staging.hpp"
 #include "core/tree_builder.hpp"
 #include "core/verify.hpp"
@@ -50,6 +51,9 @@ const std::vector<CommandSpec>& registry_table() {
         {"diff", "", "Show unstaged changes, line by line", false},
         {"merge", "<ref> [-m <msg>]", "Merge a branch or commit into the current branch", true},
         {"verify", "", "Check object integrity and repository health", false},
+        {"clone", "<url> [path]", "Clone a remote repository", false},
+        {"fetch", "<url>", "Download objects and refs from a remote", false},
+        {"push", "<url> [branch] [--force]", "Upload a branch to a remote", true},
         {"completion", "<shell>", "Print a shell completion script", false},
         {"help", "[command]", "Show this help message, or one command's details", false},
         {"version", "", "Print the Forge version", false},
@@ -190,6 +194,9 @@ std::string_view next_hint(Command command) {
         case Command::Checkout: return "'status' to see where you landed, or 'log' for history.";
         case Command::Diff: return "'add <path>' to stage the changes shown above.";
         case Command::Merge: return "'status' to review the result, or 'log'.";
+        case Command::Clone: return "'log' to see what came over, or 'status'.";
+        case Command::Fetch: return "'merge <commit>' to bring fetched history into your branch.";
+        case Command::Push: return "'log' to confirm what landed on the remote.";
         default: return "";
     }
 }
@@ -374,6 +381,36 @@ ParseResult parse_args(const std::vector<std::string>& args) {
         result.command = Command::Completion;
         if (args.size() >= 2) {
             result.completion_shell = args[1];
+        }
+        return result;
+    }
+    if (first == "clone") {
+        result.command = Command::Clone;
+        if (args.size() >= 2) {
+            result.clone_url = args[1];
+        }
+        if (args.size() >= 3) {
+            result.clone_target = args[2];
+        }
+        return result;
+    }
+    if (first == "fetch") {
+        result.command = Command::Fetch;
+        if (args.size() >= 2) {
+            result.fetch_url = args[1];
+        }
+        return result;
+    }
+    if (first == "push") {
+        result.command = Command::Push;
+        for (std::size_t i = 1; i < args.size(); ++i) {
+            if (args[i] == "--force") {
+                result.push_force = true;
+            } else if (result.push_url.empty()) {
+                result.push_url = args[i];
+            } else if (result.push_branch.empty()) {
+                result.push_branch = args[i];
+            }
         }
         return result;
     }
@@ -769,6 +806,103 @@ int execute_command(const ParseResult& result, std::ostream& out, std::ostream& 
                     out << "\nRepository is healthy.\n";
                 }
                 return report.ok() ? 0 : 1;
+            } catch (const core::ForgeError& e) {
+                err << "forge: " << e.what() << '\n';
+                return 1;
+            }
+        }
+        case Command::Clone: {
+            if (result.clone_url.empty()) {
+                err << "forge: a remote URL is required\n";
+                return 1;
+            }
+            try {
+                const std::optional<core::RemoteEndpoint> remote = core::parse_remote_url(result.clone_url);
+                if (!remote) {
+                    err << "forge: invalid remote URL (expected forge://host:port/repo): " << result.clone_url << '\n';
+                    return 1;
+                }
+                const std::string target = result.clone_target.empty() ? remote->repo_name : result.clone_target;
+                const storage::InitResult init_result = core::clone(*remote, target);
+                const std::filesystem::path absolute_dir =
+                    std::filesystem::absolute(init_result.forge_dir.parent_path()).lexically_normal();
+                out << "Cloned into " << absolute_dir.string() << '\n';
+                return 0;
+            } catch (const core::ForgeError& e) {
+                err << "forge: " << e.what() << '\n';
+                return 1;
+            }
+        }
+        case Command::Fetch: {
+            if (result.fetch_url.empty()) {
+                err << "forge: a remote URL is required\n";
+                return 1;
+            }
+            try {
+                const std::optional<core::RemoteEndpoint> remote = core::parse_remote_url(result.fetch_url);
+                if (!remote) {
+                    err << "forge: invalid remote URL (expected forge://host:port/repo): " << result.fetch_url << '\n';
+                    return 1;
+                }
+                const std::optional<RepoContext> ctx = discover_repo_context(err);
+                if (!ctx) {
+                    return 1;
+                }
+                const storage::RepositoryConfig config = storage::load_config(ctx->forge_dir);
+                storage::ObjectStore objects(config.storage_root);
+
+                // Fetch only ever adds new content-addressed objects
+                // (safe under concurrent writers by construction — see
+                // object_store.hpp) and never touches the working tree,
+                // index, or local branch refs, so unlike add/commit/
+                // switch/checkout/merge it doesn't need storage::RepoLock.
+                const core::RemoteRefs remote_refs = core::fetch(objects, *remote);
+
+                out << "Fetched " << remote_refs.branches.size() << " branch(es) from " << result.fetch_url << ":\n";
+                for (const auto& [branch, commit_id] : remote_refs.branches) {
+                    out << "  " << branch << " -> " << commit_id.to_hex().substr(0, 12) << '\n';
+                }
+                return 0;
+            } catch (const core::ForgeError& e) {
+                err << "forge: " << e.what() << '\n';
+                return 1;
+            }
+        }
+        case Command::Push: {
+            if (result.push_url.empty()) {
+                err << "forge: a remote URL is required\n";
+                return 1;
+            }
+            try {
+                const std::optional<core::RemoteEndpoint> remote = core::parse_remote_url(result.push_url);
+                if (!remote) {
+                    err << "forge: invalid remote URL (expected forge://host:port/repo): " << result.push_url << '\n';
+                    return 1;
+                }
+                const std::optional<RepoContext> ctx = discover_repo_context(err);
+                if (!ctx) {
+                    return 1;
+                }
+                const storage::RepositoryConfig config = storage::load_config(ctx->forge_dir);
+                storage::ObjectStore objects(config.storage_root);
+                storage::RefStore refs(ctx->forge_dir);
+
+                std::string branch = result.push_branch;
+                if (branch.empty()) {
+                    const storage::RefStore::Head head = refs.read_head();
+                    if (!head.branch) {
+                        err << "forge: cannot push: HEAD is detached and no branch was given\n";
+                        return 1;
+                    }
+                    branch = *head.branch;
+                }
+
+                // Push only ever reads local state and writes to the
+                // remote, so like fetch it doesn't need storage::RepoLock.
+                const core::PushResult push_result = core::push(objects, refs, *remote, branch, result.push_force);
+                out << "Pushed " << push_result.objects_uploaded << " object(s); " << branch << " is now at "
+                    << push_result.commit_id.to_hex().substr(0, 12) << " on " << result.push_url << '\n';
+                return 0;
             } catch (const core::ForgeError& e) {
                 err << "forge: " << e.what() << '\n';
                 return 1;

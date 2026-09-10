@@ -46,6 +46,7 @@ add_executable(forge_unit_tests
   unit/merge_in_object_store_tests.cpp
   unit/server_collaboration_tests.cpp
   unit/worker_pool_tests.cpp
+  unit/backup_tests.cpp
 )
 target_include_directories(forge_unit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 find_package(Threads REQUIRED)

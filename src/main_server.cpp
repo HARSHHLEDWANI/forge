@@ -6,6 +6,8 @@
 #include <vector>
 
 #include "core/error.hpp"
+#include "database/migrations.hpp"
+#include "database/postgres_connection.hpp"
 #include "server/app.hpp"
 #include "transport/http_server.hpp"
 
@@ -17,6 +19,7 @@ struct ServerArgs {
     std::filesystem::path repos_root = "forge-repos";
     std::filesystem::path data_root = "forge-data";
     std::string database_url; // empty: no PostgreSQL, collaboration routes/web UI stay off (see server/app.hpp)
+    std::filesystem::path migrations_root = "migrations"; // only consulted when database_url is set
 };
 
 ServerArgs parse_server_args(const std::vector<std::string>& args) {
@@ -32,6 +35,8 @@ ServerArgs parse_server_args(const std::vector<std::string>& args) {
             result.data_root = args[++i];
         } else if (args[i] == "--database-url" && i + 1 < args.size()) {
             result.database_url = args[++i];
+        } else if (args[i] == "--migrations-dir" && i + 1 < args.size()) {
+            result.migrations_root = args[++i];
         }
     }
     return result;
@@ -62,6 +67,26 @@ int main(int argc, char** argv) {
     parsed.database_url = resolve_database_url(parsed);
     std::filesystem::create_directories(parsed.repos_root);
     std::filesystem::create_directories(parsed.data_root);
+
+    if (!parsed.database_url.empty()) {
+        // A fresh deployment's database starts with no schema at all;
+        // applying migrations here (idempotently — see
+        // apply_pending_migrations) means "point forge-server at a
+        // database" is the whole setup step, rather than a separate
+        // manual migration run every operator has to remember before
+        // the collaboration routes/web UI will work.
+        try {
+            forge::database::PostgresConnection connection(parsed.database_url);
+            const std::size_t applied =
+                forge::database::apply_pending_migrations(connection, parsed.migrations_root);
+            if (applied > 0) {
+                std::cout << "forge-server: applied " << applied << " database migration(s)\n";
+            }
+        } catch (const forge::core::ForgeError& e) {
+            std::cerr << "forge-server: migration failed: " << e.what() << '\n';
+            return 1;
+        }
+    }
 
     forge::transport::HttpServer http_server(parsed.bind_address, parsed.port);
     forge::server::wire_routes(http_server, parsed.repos_root, parsed.data_root, parsed.database_url);

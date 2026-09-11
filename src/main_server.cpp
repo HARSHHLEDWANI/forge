@@ -1,4 +1,5 @@
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <string>
@@ -36,11 +37,29 @@ ServerArgs parse_server_args(const std::vector<std::string>& args) {
     return result;
 }
 
+// FORGE_DATABASE_URL (an environment variable) takes priority over
+// --database-url: a CLI argument is visible to any other local user via
+// `ps`/`/proc/<pid>/cmdline` on a shared machine, and the connection
+// string carries the database password. --database-url still works,
+// with a warning, for local/dev convenience (exactly how this project's
+// own docker-compose.yml and scripts/dev-build.ps1 workflows use it).
+std::string resolve_database_url(const ServerArgs& parsed) {
+    if (const char* env_value = std::getenv("FORGE_DATABASE_URL"); env_value != nullptr && *env_value != '\0') {
+        return env_value;
+    }
+    if (!parsed.database_url.empty()) {
+        std::cerr << "forge-server: warning: --database-url exposes the database password to any other "
+                     "local user (e.g. via `ps`); prefer the FORGE_DATABASE_URL environment variable\n";
+    }
+    return parsed.database_url;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     const std::vector<std::string> args(argv + 1, argv + argc);
-    const ServerArgs parsed = parse_server_args(args);
+    ServerArgs parsed = parse_server_args(args);
+    parsed.database_url = resolve_database_url(parsed);
     std::filesystem::create_directories(parsed.repos_root);
     std::filesystem::create_directories(parsed.data_root);
 

@@ -2,6 +2,7 @@
 #include <chrono>
 #include <csignal>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <sstream>
@@ -49,6 +50,19 @@ WorkerArgs parse_worker_args(const std::vector<std::string>& args) {
         }
     }
     return result;
+}
+
+// Same FORGE_DATABASE_URL-over-flag priority as forge-server
+// (src/main_server.cpp) — see resolve_database_url() there for why.
+std::string resolve_database_url(const WorkerArgs& parsed) {
+    if (const char* env_value = std::getenv("FORGE_DATABASE_URL"); env_value != nullptr && *env_value != '\0') {
+        return env_value;
+    }
+    if (!parsed.database_url.empty()) {
+        std::cerr << "forge-worker: warning: --database-url exposes the database password to any other "
+                     "local user (e.g. via `ps`); prefer the FORGE_DATABASE_URL environment variable\n";
+    }
+    return parsed.database_url;
 }
 
 // The "verify" job kind: runs core::verify_repository (Phase 11)
@@ -102,9 +116,10 @@ void handle_backup_job(
 
 int main(int argc, char** argv) {
     const std::vector<std::string> args(argv + 1, argv + argc);
-    const WorkerArgs parsed = parse_worker_args(args);
+    WorkerArgs parsed = parse_worker_args(args);
+    parsed.database_url = resolve_database_url(parsed);
     if (parsed.database_url.empty()) {
-        std::cerr << "forge-worker: --database-url is required\n";
+        std::cerr << "forge-worker: --database-url or FORGE_DATABASE_URL is required\n";
         return 1;
     }
 

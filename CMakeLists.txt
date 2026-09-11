@@ -57,6 +57,7 @@ add_library(forge_core STATIC
   src/transport/http_server.cpp
   src/transport/http_client.cpp
   src/server/app.cpp
+  src/server/rate_limiter.cpp
   src/server/repo_registry.cpp
   src/server/collaboration_routes.cpp
   src/server/web_ui.cpp

@@ -59,7 +59,7 @@ public:
 
 private:
     HttpResponse dispatch(const HttpRequest& request) const;
-    void handle_connection(ForgeSocket client) const;
+    void handle_connection(ForgeSocket client, std::string remote_address) const;
 
     std::string bind_address_;
     std::uint16_t port_;

@@ -107,18 +107,26 @@ void HttpServer::serve() {
             continue; // timed out (expected, just re-checking stop_requested_) or a transient error
         }
 
-        const ForgeSocket client = accept(listen_socket_, nullptr, nullptr);
+        sockaddr_in peer_addr{};
+        ForgeSockLen peer_len = sizeof(peer_addr);
+        const ForgeSocket client =
+            accept(listen_socket_, reinterpret_cast<sockaddr*>(&peer_addr), &peer_len);
         if (client == kInvalidForgeSocket) {
             continue;
         }
-        handle_connection(client);
+        char peer_text[INET_ADDRSTRLEN] = {};
+        std::string remote_address;
+        if (inet_ntop(AF_INET, &peer_addr.sin_addr, peer_text, sizeof(peer_text)) != nullptr) {
+            remote_address = peer_text;
+        }
+        handle_connection(client, remote_address);
         close_socket(client);
     }
 }
 
 void HttpServer::stop() { stop_requested_.store(true); }
 
-void HttpServer::handle_connection(ForgeSocket client) const {
+void HttpServer::handle_connection(ForgeSocket client, std::string remote_address) const {
     std::string buffer;
     char chunk[4096];
     std::size_t header_end = std::string::npos;
@@ -142,6 +150,7 @@ void HttpServer::handle_connection(ForgeSocket client) const {
         return;
     }
     HttpRequest request = *parsed;
+    request.remote_address = std::move(remote_address);
     request.body = buffer.substr(header_end + 4); // body bytes already read as part of the initial recv burst
 
     std::size_t content_length = 0;

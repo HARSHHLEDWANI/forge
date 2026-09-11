@@ -181,3 +181,27 @@ FORGE_TEST_CASE(permissions_endpoint_requires_admin_once_a_permission_exists) {
     FORGE_CHECK(granted.find("HTTP/1.1 200 OK") == 0);
     FORGE_CHECK(auth_store.get_permission("demo", "bob") == forge::domain::Role::Write);
 }
+
+FORGE_TEST_CASE(login_endpoint_rate_limits_repeated_attempts_from_the_same_client) {
+    RunningAuthServer server;
+    server.send(http_request("POST", "/users?username=alice", "hunter2"));
+
+    // The bucket (capacity 10, refilled at 1/sec — see server/app.cpp's
+    // login_rate_limiter) starts full. Each attempt here costs a full
+    // HTTP round trip plus a PBKDF2 hash (storage/auth_store.hpp), which
+    // isn't instantaneous, so a fixed "the Nth call is the throttled
+    // one" assertion would be timing-flaky; instead, fire well past
+    // capacity and check throttling kicked in at least once.
+    int unauthorized_count = 0;
+    int throttled_count = 0;
+    for (int i = 0; i < 30; ++i) {
+        const std::string response = server.send(http_request("POST", "/login?username=alice", "wrong-password"));
+        if (response.find("HTTP/1.1 401") == 0) {
+            ++unauthorized_count;
+        } else if (response.find("HTTP/1.1 429") == 0) {
+            ++throttled_count;
+        }
+    }
+    FORGE_CHECK(throttled_count > 0);
+    FORGE_CHECK(unauthorized_count + throttled_count == 30);
+}

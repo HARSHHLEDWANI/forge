@@ -19,6 +19,7 @@ struct HttpRequest {
     std::string version;     // "HTTP/1.1" as sent
     HttpHeaders headers;
     std::string body;
+    std::string remote_address; // peer IP as captured by accept(), "" if unavailable (e.g. in a unit test that builds a request directly)
 };
 
 struct HttpResponse {

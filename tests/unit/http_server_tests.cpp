@@ -53,6 +53,19 @@ FORGE_TEST_CASE(http_server_returns_404_for_an_unregistered_path) {
     FORGE_CHECK(response.find("HTTP/1.1 404") == 0);
 }
 
+FORGE_TEST_CASE(http_server_captures_the_client_remote_address) {
+    HttpServer server("127.0.0.1", 0);
+    std::string captured;
+    server.route("GET", "/whoami", [&captured](const HttpRequest& request) {
+        captured = request.remote_address;
+        return plain_text_response(200, "OK", "");
+    });
+    RunningServer running(server);
+
+    send_raw_http_request(server.port(), "GET /whoami HTTP/1.1\r\nHost: x\r\n\r\n");
+    FORGE_CHECK(captured == "127.0.0.1");
+}
+
 FORGE_TEST_CASE(http_server_matches_method_and_path_together) {
     HttpServer server("127.0.0.1", 0);
     server.route("GET", "/thing", [](const HttpRequest&) { return plain_text_response(200, "OK", "got"); });

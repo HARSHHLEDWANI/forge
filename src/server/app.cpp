@@ -1,6 +1,7 @@
 #include "server/app.hpp"
 
 #include <chrono>
+#include <memory>
 #include <optional>
 
 #include "core/error.hpp"
@@ -13,6 +14,7 @@
 #include "domain/ssh_key.hpp"
 #include "domain/token.hpp"
 #include "server/collaboration_routes.hpp"
+#include "server/rate_limiter.hpp"
 #include "server/repo_registry.hpp"
 #include "server/web_ui.hpp"
 #include "storage/auth_store.hpp"
@@ -60,6 +62,14 @@ void wire_routes(
     wire_collaboration_routes(server, repos_root, data_root, database_url);
     wire_web_ui(server, repos_root, database_url);
 
+    // 10 attempts, refilled at 1/sec — generous for a real user mistyping
+    // a password a few times, tight enough to make credential-stuffing
+    // against /login and account creation spam against /users slow.
+    // Shared (not per-lambda) so every route below debits the same
+    // per-IP bucket; safe with no locking since HttpServer's accept loop
+    // is single-threaded (see rate_limiter.hpp).
+    auto login_rate_limiter = std::make_shared<RateLimiter>(10, 1.0);
+
     server.route("GET", "/healthz", [](const transport::HttpRequest&) {
         return transport::json_response(200, "OK", R"({"status":"ok"})");
     });
@@ -69,8 +79,11 @@ void wire_routes(
             200, "OK", std::string(R"({"version":")") + std::string(core::kVersion) + "\"}");
     });
 
-    server.route("POST", "/users", [data_root](const transport::HttpRequest& request) {
+    server.route("POST", "/users", [data_root, login_rate_limiter](const transport::HttpRequest& request) {
         try {
+            if (!login_rate_limiter->allow(request.remote_address)) {
+                return transport::plain_text_response(429, "Too Many Requests", "too many requests; slow down\n");
+            }
             storage::AuthStore auth_store(data_root);
             const std::string username = query_value(request, "username");
             if (username.empty() || request.body.empty()) {
@@ -83,8 +96,11 @@ void wire_routes(
         }
     });
 
-    server.route("POST", "/login", [data_root](const transport::HttpRequest& request) {
+    server.route("POST", "/login", [data_root, login_rate_limiter](const transport::HttpRequest& request) {
         try {
+            if (!login_rate_limiter->allow(request.remote_address)) {
+                return transport::plain_text_response(429, "Too Many Requests", "too many requests; slow down\n");
+            }
             storage::AuthStore auth_store(data_root);
             const std::string username = query_value(request, "username");
             const std::int64_t now = now_unix();

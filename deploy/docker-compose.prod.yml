@@ -1,0 +1,85 @@
+# Production deployment: forge-server + forge-worker behind Caddy,
+# which terminates TLS (automatic Let's Encrypt certificate for
+# FORGE_DOMAIN) and is the only service reachable from outside this
+# compose network. forge-server/forge-worker speak plain HTTP and are
+# never given a `ports:` mapping of their own — see deploy/README.md.
+#
+# Run from the deploy/ directory:
+#   cp .env.example .env   # fill in FORGE_DOMAIN and FORGE_DB_PASSWORD
+#   docker compose -f docker-compose.prod.yml up -d --build
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: forge
+      POSTGRES_PASSWORD: ${FORGE_DB_PASSWORD:?set FORGE_DB_PASSWORD in .env}
+      POSTGRES_DB: forge
+    volumes:
+      - forge-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U forge -d forge"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    # No `ports:` — reachable only from other services on this
+    # compose's internal network, never from the host or internet.
+
+  forge-server:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: forge:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Env var, not a --database-url flag: see main_server.cpp's
+      # resolve_database_url — a CLI flag would leak the password to
+      # any other local user via `ps`.
+      FORGE_DATABASE_URL: postgresql://forge:${FORGE_DB_PASSWORD:?set FORGE_DB_PASSWORD in .env}@postgres:5432/forge
+    volumes:
+      - forge-repos:/app/forge-repos
+      - forge-data:/app/forge-data
+    # No `ports:` published to the host — only `caddy` (below) is
+    # reachable from outside this compose network.
+
+  forge-worker:
+    image: forge:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      forge-server:
+        condition: service_started
+    entrypoint: ["forge-worker"]
+    environment:
+      FORGE_DATABASE_URL: postgresql://forge:${FORGE_DB_PASSWORD:?set FORGE_DB_PASSWORD in .env}@postgres:5432/forge
+    volumes:
+      - forge-repos:/app/forge-repos
+      - forge-backups:/app/forge-backups
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - forge-server
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      FORGE_DOMAIN: ${FORGE_DOMAIN:?set FORGE_DOMAIN in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  forge-postgres-data:
+  forge-repos:
+  forge-data:
+  forge-backups:
+  caddy-data:
+  caddy-config:

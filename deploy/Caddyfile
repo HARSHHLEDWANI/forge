@@ -1,0 +1,9 @@
+{$FORGE_DOMAIN} {
+    # Caddy handles TLS itself: automatic certificate issuance/renewal
+    # via Let's Encrypt (or ZeroSSL as fallback) for {$FORGE_DOMAIN},
+    # HTTP->HTTPS redirect, and OCSP stapling — none of that is forge-
+    # server's concern. forge-server only ever speaks plain HTTP, and
+    # only to this proxy, over the compose-internal network (see
+    # docker-compose.prod.yml: it publishes no host port of its own).
+    reverse_proxy forge-server:8080
+}

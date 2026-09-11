@@ -32,3 +32,6 @@ Testing/
 # OS
 .DS_Store
 Thumbs.db
+
+# Production secrets (see deploy/.env.example)
+deploy/.env

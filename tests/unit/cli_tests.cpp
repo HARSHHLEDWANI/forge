@@ -1,11 +1,18 @@
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <string>
+#include <thread>
 
 #include "cli/cli.hpp"
+#include "server/app.hpp"
+#include "storage/credential_store.hpp"
+#include "support/http_test_client.hpp"
 #include "support/temp_dir.hpp"
 #include "support/test_framework.hpp"
+#include "transport/http_server.hpp"
 
 using forge::cli::Command;
 using forge::cli::parse_args;
@@ -623,4 +630,187 @@ FORGE_TEST_CASE(run_diff_excludes_untracked_files) {
     const int code = run({"diff"}, out, err);
     FORGE_CHECK(code == 0);
     FORGE_CHECK(out.str().empty());
+}
+
+namespace {
+
+// `forge login`/`forge logout` write to $FORGE_HOME/.forge/credentials
+// (cli.cpp's open_credential_store honors FORGE_HOME exactly like
+// resolve_author honors FORGE_AUTHOR_NAME) — this guard points that at
+// a throwaway TempDir for the duration of a test and restores whatever
+// was there before, the same isolation CwdGuard gives the working
+// directory.
+struct ForgeHomeGuard {
+    TempDir home;
+    std::optional<std::string> original;
+
+    ForgeHomeGuard() {
+        if (const char* existing = std::getenv("FORGE_HOME")) {
+            original = existing;
+        }
+#if defined(_WIN32)
+        _putenv_s("FORGE_HOME", home.path().string().c_str());
+#else
+        setenv("FORGE_HOME", home.path().string().c_str(), 1);
+#endif
+    }
+
+    ~ForgeHomeGuard() {
+#if defined(_WIN32)
+        _putenv_s("FORGE_HOME", original ? original->c_str() : "");
+#else
+        if (original) {
+            setenv("FORGE_HOME", original->c_str(), 1);
+        } else {
+            unsetenv("FORGE_HOME");
+        }
+#endif
+    }
+};
+
+struct RunningCliServer {
+    TempDir repos_root;
+    TempDir data_root;
+    forge::transport::HttpServer http_server{"127.0.0.1", 0};
+    std::thread thread;
+
+    RunningCliServer() {
+        forge::server::wire_routes(http_server, repos_root.path(), data_root.path());
+        http_server.start();
+        thread = std::thread([this] { http_server.serve(); });
+    }
+
+    ~RunningCliServer() {
+        http_server.stop();
+        thread.join();
+    }
+
+    std::string url() const { return "forge://127.0.0.1:" + std::to_string(http_server.port()); }
+
+    void register_user(const std::string& username, const std::string& password) const {
+        std::ostringstream request;
+        request << "POST /users?username=" << username << " HTTP/1.1\r\nHost: x\r\nContent-Length: " << password.size()
+                << "\r\n\r\n"
+                << password;
+        forge::test::send_raw_http_request(http_server.port(), request.str());
+    }
+};
+
+} // namespace
+
+FORGE_TEST_CASE(parse_args_login_reads_url_username_and_password) {
+    const auto result =
+        parse_args({"login", "forge://example.com:8080", "--username", "alice", "--password", "hunter2"});
+    FORGE_CHECK(result.command == Command::Login);
+    FORGE_CHECK(result.login_url == "forge://example.com:8080");
+    FORGE_CHECK(result.login_username == "alice");
+    FORGE_CHECK(result.login_password == "hunter2");
+}
+
+FORGE_TEST_CASE(parse_args_logout_reads_url) {
+    const auto result = parse_args({"logout", "forge://example.com:8080"});
+    FORGE_CHECK(result.command == Command::Logout);
+    FORGE_CHECK(result.logout_url == "forge://example.com:8080");
+}
+
+FORGE_TEST_CASE(run_login_without_username_is_a_usage_error) {
+    std::ostringstream out;
+    std::ostringstream err;
+    const int code = run({"login", "forge://example.com:8080"}, out, err);
+    FORGE_CHECK(code != 0);
+    FORGE_CHECK(err.str().find("--username") != std::string::npos);
+}
+
+FORGE_TEST_CASE(run_login_rejects_a_malformed_server_address) {
+    std::ostringstream out;
+    std::ostringstream err;
+    const int code = run({"login", "not-a-url", "--username", "alice", "--password", "x"}, out, err);
+    FORGE_CHECK(code != 0);
+    FORGE_CHECK(err.str().find("invalid server address") != std::string::npos);
+}
+
+FORGE_TEST_CASE(run_login_with_wrong_password_fails) {
+    ForgeHomeGuard home_guard;
+    RunningCliServer server;
+    server.register_user("alice", "hunter2");
+
+    std::ostringstream out;
+    std::ostringstream err;
+    const int code = run({"login", server.url(), "--username", "alice", "--password", "wrong"}, out, err);
+    FORGE_CHECK(code != 0);
+    FORGE_CHECK(err.str().find("login failed") != std::string::npos);
+}
+
+FORGE_TEST_CASE(run_login_with_the_right_password_saves_a_credential) {
+    ForgeHomeGuard home_guard;
+    RunningCliServer server;
+    server.register_user("alice", "hunter2");
+
+    std::ostringstream out;
+    std::ostringstream err;
+    const int code = run({"login", server.url(), "--username", "alice", "--password", "hunter2"}, out, err);
+    FORGE_CHECK(code == 0);
+    FORGE_CHECK(out.str().find("Logged in to") != std::string::npos);
+
+    const forge::storage::CredentialStore store(home_guard.home.path());
+    const std::optional<std::string> saved = store.find("forge://127.0.0.1:" + std::to_string(server.http_server.port()));
+    FORGE_CHECK(saved.has_value());
+    FORGE_CHECK(!saved->empty());
+}
+
+FORGE_TEST_CASE(run_logout_removes_a_saved_credential) {
+    ForgeHomeGuard home_guard;
+    RunningCliServer server;
+    server.register_user("alice", "hunter2");
+    run({"login", server.url(), "--username", "alice", "--password", "hunter2"}, out_sink(), out_sink());
+
+    std::ostringstream out;
+    std::ostringstream err;
+    const int code = run({"logout", server.url()}, out, err);
+    FORGE_CHECK(code == 0);
+    FORGE_CHECK(out.str().find("Logged out of") != std::string::npos);
+
+    const forge::storage::CredentialStore store(home_guard.home.path());
+    FORGE_CHECK(!store.find(server.url()).has_value());
+}
+
+FORGE_TEST_CASE(run_push_uses_a_saved_credential_to_satisfy_a_write_permission_check) {
+    ForgeHomeGuard home_guard;
+    RunningCliServer server;
+    server.register_user("alice", "hunter2");
+    run({"login", server.url(), "--username", "alice", "--password", "hunter2"}, out_sink(), out_sink());
+
+    TempDir repo_dir;
+    CwdGuard guard;
+    std::filesystem::current_path(repo_dir.path());
+    run({"init"}, out_sink(), out_sink());
+    configure_author(repo_dir.path());
+    std::ofstream("a.txt", std::ios::binary) << "content";
+    run({"add", "."}, out_sink(), out_sink());
+    run({"commit", "-m", "first"}, out_sink(), out_sink());
+
+    const std::string remote_url = server.url() + "/demo";
+
+    // First push, authenticated as alice via the saved token: creates
+    // the repo ("push to create") and bootstraps alice as its Admin
+    // (server/app.cpp's POST /ref bootstrap) — the same path an
+    // anonymous push would take, just now with a real identity behind it.
+    std::ostringstream first_out;
+    std::ostringstream first_err;
+    FORGE_CHECK(run({"push", remote_url}, first_out, first_err) == 0);
+
+    // Logged out: the repo now has a recorded permission (alice/Admin),
+    // so a second push with no saved credential must be rejected.
+    run({"logout", server.url()}, out_sink(), out_sink());
+    std::ostringstream second_out;
+    std::ostringstream second_err;
+    const int second_code = run({"push", remote_url}, second_out, second_err);
+    FORGE_CHECK(second_code != 0);
+    FORGE_CHECK(second_err.str().find("write access is required") != std::string::npos);
+
+    // Logging back in restores push access via the saved token again.
+    run({"login", server.url(), "--username", "alice", "--password", "hunter2"}, out_sink(), out_sink());
+    std::ostringstream third_out;
+    std::ostringstream third_err;
+    FORGE_CHECK(run({"push", remote_url}, third_out, third_err) == 0);
 }

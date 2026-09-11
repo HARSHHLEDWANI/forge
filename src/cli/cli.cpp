@@ -24,11 +24,19 @@
 #include "core/tree_builder.hpp"
 #include "core/verify.hpp"
 #include "core/version.hpp"
+#include "storage/credential_store.hpp"
 #include "storage/index_store.hpp"
 #include "storage/object_store.hpp"
 #include "storage/ref_store.hpp"
 #include "storage/repo_lock.hpp"
 #include "storage/repository.hpp"
+
+#if defined(_WIN32)
+#include <conio.h>
+#else
+#include <termios.h>
+#include <unistd.h>
+#endif
 
 namespace forge::cli {
 
@@ -57,6 +65,9 @@ const std::vector<CommandSpec>& registry_table() {
         {"push", "<url> [branch] [--force]", "Upload a branch to a remote", true},
         {"backup", "<destination>", "Back up every branch and object to a directory", false},
         {"restore", "<backup-dir> <target-dir>", "Restore a backup into a fresh repository", false},
+        {"login", "<url> --username <name> [--password <pass>]", "Authenticate to a Forge server and save the token",
+         false},
+        {"logout", "<url>", "Remove a saved credential for a Forge server", false},
         {"completion", "<shell>", "Print a shell completion script", false},
         {"help", "[command]", "Show this help message, or one command's details", false},
         {"version", "", "Print the Forge version", false},
@@ -202,6 +213,7 @@ std::string_view next_hint(Command command) {
         case Command::Push: return "'log' to confirm what landed on the remote.";
         case Command::Backup: return "'verify' to double-check the source repository is healthy too.";
         case Command::Restore: return "'log' and 'status' to confirm the restored repository looks right.";
+        case Command::Login: return "'push'/'fetch'/'clone' against that server now use the saved token.";
         default: return "";
     }
 }
@@ -251,6 +263,67 @@ std::string resolve_author(const storage::RepositoryConfig& config) {
             "or the FORGE_AUTHOR_NAME/FORGE_AUTHOR_EMAIL environment variables");
     }
     return name + " <" + email + ">";
+}
+
+// Opens the CLI's credential store, honoring FORGE_HOME the same way
+// resolve_author honors FORGE_AUTHOR_NAME/FORGE_AUTHOR_EMAIL — an escape
+// hatch for tests (and anyone who wants ~/.forge/credentials somewhere
+// other than the real home directory) rather than always resolving the
+// OS home directory.
+storage::CredentialStore open_credential_store() {
+    if (const char* forge_home = std::getenv("FORGE_HOME")) {
+        return storage::CredentialStore(std::filesystem::path(forge_home));
+    }
+    return storage::CredentialStore();
+}
+
+// Looks up a saved credential for whatever server `remote` names,
+// keyed the same way `forge login` saves one (core::render_server_address
+// drops the repo name — a token authenticates against the whole server,
+// not one repository). Returns "" (no token) if none is saved, which
+// push/fetch/clone treat as "send no Authorization header", exactly
+// their behavior before this existed.
+std::string find_saved_token(const core::RemoteEndpoint& remote) {
+    const core::ServerAddress server{remote.host, remote.port};
+    return open_credential_store().find(core::render_server_address(server)).value_or("");
+}
+
+// Reads a line from stdin with terminal echo disabled where the
+// platform supports it (POSIX termios / Windows _getch), falling back
+// to a plain (echoed) read otherwise rather than failing outright —
+// this is a courtesy so a password doesn't land in the terminal's
+// scrollback, not a security boundary in itself.
+std::string read_password_masked() {
+#if defined(_WIN32)
+    std::string password;
+    int ch;
+    while ((ch = _getch()) != '\r' && ch != '\n' && ch != EOF) {
+        if (ch == '\b') {
+            if (!password.empty()) {
+                password.pop_back();
+            }
+        } else {
+            password.push_back(static_cast<char>(ch));
+        }
+    }
+    std::cout << '\n';
+    return password;
+#else
+    termios original{};
+    const bool have_termios = tcgetattr(STDIN_FILENO, &original) == 0;
+    if (have_termios) {
+        termios no_echo = original;
+        no_echo.c_lflag &= ~static_cast<tcflag_t>(ECHO);
+        tcsetattr(STDIN_FILENO, TCSANOW, &no_echo);
+    }
+    std::string password;
+    std::getline(std::cin, password);
+    if (have_termios) {
+        tcsetattr(STDIN_FILENO, TCSANOW, &original);
+        std::cout << '\n';
+    }
+    return password;
+#endif
 }
 
 // Acquires the whole-repository lock (storage/repo_lock.hpp) for a
@@ -433,6 +506,27 @@ ParseResult parse_args(const std::vector<std::string>& args) {
         }
         if (args.size() >= 3) {
             result.restore_target = args[2];
+        }
+        return result;
+    }
+    if (first == "login") {
+        result.command = Command::Login;
+        if (args.size() >= 2) {
+            result.login_url = args[1];
+        }
+        for (std::size_t i = 2; i < args.size(); ++i) {
+            if (args[i] == "--username" && i + 1 < args.size()) {
+                result.login_username = args[++i];
+            } else if (args[i] == "--password" && i + 1 < args.size()) {
+                result.login_password = args[++i];
+            }
+        }
+        return result;
+    }
+    if (first == "logout") {
+        result.command = Command::Logout;
+        if (args.size() >= 2) {
+            result.logout_url = args[1];
         }
         return result;
     }
@@ -845,7 +939,7 @@ int execute_command(const ParseResult& result, std::ostream& out, std::ostream& 
                     return 1;
                 }
                 const std::string target = result.clone_target.empty() ? remote->repo_name : result.clone_target;
-                const storage::InitResult init_result = core::clone(*remote, target);
+                const storage::InitResult init_result = core::clone(*remote, target, find_saved_token(*remote));
                 const std::filesystem::path absolute_dir =
                     std::filesystem::absolute(init_result.forge_dir.parent_path()).lexically_normal();
                 out << "Cloned into " << absolute_dir.string() << '\n';
@@ -878,7 +972,7 @@ int execute_command(const ParseResult& result, std::ostream& out, std::ostream& 
                 // object_store.hpp) and never touches the working tree,
                 // index, or local branch refs, so unlike add/commit/
                 // switch/checkout/merge it doesn't need storage::RepoLock.
-                const core::RemoteRefs remote_refs = core::fetch(objects, *remote);
+                const core::RemoteRefs remote_refs = core::fetch(objects, *remote, find_saved_token(*remote));
 
                 out << "Fetched " << remote_refs.branches.size() << " branch(es) from " << result.fetch_url << ":\n";
                 for (const auto& [branch, commit_id] : remote_refs.branches) {
@@ -921,7 +1015,8 @@ int execute_command(const ParseResult& result, std::ostream& out, std::ostream& 
 
                 // Push only ever reads local state and writes to the
                 // remote, so like fetch it doesn't need storage::RepoLock.
-                const core::PushResult push_result = core::push(objects, refs, *remote, branch, result.push_force);
+                const core::PushResult push_result =
+                    core::push(objects, refs, *remote, branch, result.push_force, find_saved_token(*remote));
                 out << "Pushed " << push_result.objects_uploaded << " object(s); " << branch << " is now at "
                     << push_result.commit_id.to_hex().substr(0, 12) << " on " << result.push_url << '\n';
                 return 0;
@@ -963,6 +1058,53 @@ int execute_command(const ParseResult& result, std::ostream& out, std::ostream& 
                 const std::filesystem::path absolute_dir =
                     std::filesystem::absolute(init_result.forge_dir.parent_path()).lexically_normal();
                 out << "Restored into " << absolute_dir.string() << '\n';
+                return 0;
+            } catch (const core::ForgeError& e) {
+                err << "forge: " << e.what() << '\n';
+                return 1;
+            }
+        }
+        case Command::Login: {
+            if (result.login_url.empty() || result.login_username.empty()) {
+                err << "forge: a server URL and --username <name> are required\n";
+                return 1;
+            }
+            try {
+                const std::optional<core::ServerAddress> server = core::parse_server_address(result.login_url);
+                if (!server) {
+                    err << "forge: invalid server address (expected forge://host:port or host:port): "
+                        << result.login_url << '\n';
+                    return 1;
+                }
+                std::string password = result.login_password;
+                if (password.empty()) {
+                    out << "Password: ";
+                    password = read_password_masked();
+                }
+                const std::string token = core::login(*server, result.login_username, password);
+                open_credential_store().save(core::render_server_address(*server), token);
+                out << "Logged in to " << core::render_server_address(*server) << " as " << result.login_username
+                    << '\n';
+                return 0;
+            } catch (const core::ForgeError& e) {
+                err << "forge: " << e.what() << '\n';
+                return 1;
+            }
+        }
+        case Command::Logout: {
+            if (result.logout_url.empty()) {
+                err << "forge: a server URL is required\n";
+                return 1;
+            }
+            try {
+                const std::optional<core::ServerAddress> server = core::parse_server_address(result.logout_url);
+                if (!server) {
+                    err << "forge: invalid server address (expected forge://host:port or host:port): "
+                        << result.logout_url << '\n';
+                    return 1;
+                }
+                open_credential_store().remove(core::render_server_address(*server));
+                out << "Logged out of " << core::render_server_address(*server) << '\n';
                 return 0;
             } catch (const core::ForgeError& e) {
                 err << "forge: " << e.what() << '\n';

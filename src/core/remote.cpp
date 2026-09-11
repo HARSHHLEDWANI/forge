@@ -17,7 +17,7 @@ namespace {
 
 transport::HttpResponse call(
     const RemoteEndpoint& remote, std::string method, std::string_view route,
-    const std::map<std::string, std::string>& params, std::string body = "") {
+    const std::map<std::string, std::string>& params, std::string body = "", std::string_view auth_token = "") {
     transport::HttpClientRequest request;
     request.method = std::move(method);
     request.path = "/" + std::string(route);
@@ -25,6 +25,9 @@ transport::HttpResponse call(
         request.path += "?" + transport::render_query_string(params);
     }
     request.body = std::move(body);
+    if (!auth_token.empty()) {
+        request.headers["authorization"] = "Bearer " + std::string(auth_token);
+    }
     return transport::send_http_request(remote.host, remote.port, request);
 }
 
@@ -108,8 +111,76 @@ std::string render_remote_url(const RemoteEndpoint& remote) {
     return "forge://" + remote.host + ":" + std::to_string(remote.port) + "/" + remote.repo_name;
 }
 
-RemoteRefs fetch(storage::ObjectStore& objects, const RemoteEndpoint& remote) {
-    const transport::HttpResponse refs_response = call(remote, "GET", "refs", {{"repo", remote.repo_name}});
+std::optional<ServerAddress> parse_server_address(std::string_view url) {
+    std::string_view rest = url;
+    constexpr std::string_view kScheme = "forge://";
+    if (rest.rfind(kScheme, 0) == 0) {
+        rest = rest.substr(kScheme.size());
+    }
+    const std::size_t slash = rest.find('/');
+    const std::string_view host_port = slash == std::string_view::npos ? rest : rest.substr(0, slash);
+
+    const std::size_t colon = host_port.find(':');
+    if (colon == std::string_view::npos) {
+        return std::nullopt;
+    }
+    const std::string_view host = host_port.substr(0, colon);
+    const std::string_view port_text = host_port.substr(colon + 1);
+    if (host.empty() || port_text.empty()) {
+        return std::nullopt;
+    }
+
+    int parsed_port = 0;
+    try {
+        std::size_t consumed = 0;
+        parsed_port = std::stoi(std::string(port_text), &consumed);
+        if (consumed != port_text.size()) {
+            return std::nullopt;
+        }
+    } catch (const std::exception&) {
+        return std::nullopt;
+    }
+    if (parsed_port <= 0 || parsed_port > 65535) {
+        return std::nullopt;
+    }
+
+    return ServerAddress{std::string(host), static_cast<std::uint16_t>(parsed_port)};
+}
+
+std::string render_server_address(const ServerAddress& server) {
+    return "forge://" + server.host + ":" + std::to_string(server.port);
+}
+
+std::string login(const ServerAddress& server, std::string_view username, std::string_view password) {
+    transport::HttpClientRequest request;
+    request.method = "POST";
+    request.path = "/login?" + transport::render_query_string({{"username", std::string(username)}});
+    request.body = std::string(password);
+    const transport::HttpResponse response = transport::send_http_request(server.host, server.port, request);
+    if (response.status != 200) {
+        throw ForgeError("login failed: " + response.body);
+    }
+
+    // The body is `{"token":"<id>.<secret>"}` (server/app.cpp's POST
+    // /login) — a hand-parse for this one field rather than pulling in
+    // a JSON library, the same call core/remote_protocol.hpp already
+    // made for the richer ref/push-request shapes.
+    const std::string key = "\"token\":\"";
+    const std::size_t start = response.body.find(key);
+    if (start == std::string::npos) {
+        throw ForgeError("login failed: malformed response from server");
+    }
+    const std::size_t value_start = start + key.size();
+    const std::size_t value_end = response.body.find('"', value_start);
+    if (value_end == std::string::npos) {
+        throw ForgeError("login failed: malformed response from server");
+    }
+    return response.body.substr(value_start, value_end - value_start);
+}
+
+RemoteRefs fetch(storage::ObjectStore& objects, const RemoteEndpoint& remote, std::string_view auth_token) {
+    const transport::HttpResponse refs_response =
+        call(remote, "GET", "refs", {{"repo", remote.repo_name}}, "", auth_token);
     if (refs_response.status != 200) {
         throw ForgeError("fetch failed: " + refs_response.body);
     }
@@ -135,7 +206,7 @@ RemoteRefs fetch(storage::ObjectStore& objects, const RemoteEndpoint& remote) {
         }
 
         const transport::HttpResponse object_response =
-            call(remote, "GET", "object", {{"repo", remote.repo_name}, {"id", id.to_hex()}});
+            call(remote, "GET", "object", {{"repo", remote.repo_name}, {"id", id.to_hex()}}, "", auth_token);
         if (object_response.status != 200) {
             throw ForgeError("fetch failed: remote is missing object " + id.to_hex());
         }
@@ -178,12 +249,13 @@ RemoteRefs fetch(storage::ObjectStore& objects, const RemoteEndpoint& remote) {
     return *remote_refs;
 }
 
-storage::InitResult clone(const RemoteEndpoint& remote, const std::filesystem::path& target_dir) {
+storage::InitResult clone(
+    const RemoteEndpoint& remote, const std::filesystem::path& target_dir, std::string_view auth_token) {
     const storage::InitResult init_result = storage::initialize_repository(target_dir);
     const storage::RepositoryConfig config = storage::load_config(init_result.forge_dir);
 
     storage::ObjectStore objects(config.storage_root);
-    const RemoteRefs remote_refs = fetch(objects, remote);
+    const RemoteRefs remote_refs = fetch(objects, remote, auth_token);
 
     storage::RefStore refs(init_result.forge_dir);
     storage::IndexStore index_store(init_result.forge_dir / storage::kIndexFileName);
@@ -216,7 +288,7 @@ storage::InitResult clone(const RemoteEndpoint& remote, const std::filesystem::p
 
 PushResult push(
     storage::ObjectStore& objects, const storage::RefStore& refs, const RemoteEndpoint& remote,
-    std::string_view branch, bool force) {
+    std::string_view branch, bool force, std::string_view auth_token) {
     const std::optional<ObjectId> local_tip = refs.read_branch(branch);
     if (!local_tip) {
         throw ForgeError("cannot push: no such local branch: " + std::string(branch));
@@ -227,7 +299,8 @@ PushResult push(
     // the common hosting convention (see server/repo_registry.hpp), so
     // this is just an empty ref set to negotiate against, same as a
     // freshly created empty repository would report.
-    const transport::HttpResponse refs_response = call(remote, "GET", "refs", {{"repo", remote.repo_name}});
+    const transport::HttpResponse refs_response =
+        call(remote, "GET", "refs", {{"repo", remote.repo_name}}, "", auth_token);
     std::optional<RemoteRefs> remote_refs;
     if (refs_response.status == 404) {
         remote_refs = RemoteRefs{};
@@ -257,7 +330,7 @@ PushResult push(
         const storage::StoredObject stored = objects.get(id);
         const std::string raw = encode_canonical_object(stored.type, stored.payload);
         const transport::HttpResponse upload_response =
-            call(remote, "POST", "object", {{"repo", remote.repo_name}}, raw);
+            call(remote, "POST", "object", {{"repo", remote.repo_name}}, raw, auth_token);
         if (upload_response.status != 200) {
             throw ForgeError("push failed: could not upload object " + id.to_hex() + ": " + upload_response.body);
         }
@@ -270,7 +343,7 @@ PushResult push(
 
     const transport::HttpResponse ref_response = call(
         remote, "POST", "ref", {{"repo", remote.repo_name}, {"branch", std::string(branch)}},
-        encode_push_ref_request(push_request));
+        encode_push_ref_request(push_request), auth_token);
     if (ref_response.status != 200) {
         throw ForgeError("push rejected: " + ref_response.body);
     }

@@ -29,6 +29,7 @@ add_executable(forge_unit_tests
   unit/http_parser_tests.cpp
   unit/http_server_tests.cpp
   unit/rate_limiter_tests.cpp
+  unit/credential_store_tests.cpp
   unit/remote_protocol_tests.cpp
   unit/repo_registry_tests.cpp
   unit/remote_tests.cpp

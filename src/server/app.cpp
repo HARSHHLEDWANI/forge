@@ -288,22 +288,28 @@ void wire_routes(
                 return transport::plain_text_response(400, "Bad Request", "repo and branch are required\n");
             }
 
-            const bool repo_existed_already = registry.exists(repo_name);
+            // Whether write access requires a permission check: keyed off
+            // whether *any* permission is recorded for this repo (same
+            // "legacy/open" test POST /object uses just above), not
+            // whether the repo directory already exists. Directory
+            // existence isn't a reliable signal here — a push's own
+            // earlier POST /object calls (this handler's sibling route)
+            // already call registry.ensure_exists() for every object
+            // uploaded, so by the time this handler runs the directory
+            // has typically already been created by this very push,
+            // even for a repository that's otherwise brand new.
+            storage::AuthStore auth_store(data_root);
             std::optional<std::string> authenticated_username;
-            if (repo_existed_already) {
-                storage::AuthStore auth_store(data_root);
-                if (auth_store.repo_has_any_permission(repo_name)) {
-                    authenticated_username = authenticate(request, auth_store);
-                    const std::optional<domain::Role> role = authenticated_username
-                                                                   ? auth_store.get_permission(repo_name, *authenticated_username)
-                                                                   : std::nullopt;
-                    if (!role || !domain::role_satisfies(*role, domain::Role::Write)) {
-                        return transport::plain_text_response(403, "Forbidden", "write access is required\n");
-                    }
+            if (auth_store.repo_has_any_permission(repo_name)) {
+                authenticated_username = authenticate(request, auth_store);
+                const std::optional<domain::Role> role =
+                    authenticated_username ? auth_store.get_permission(repo_name, *authenticated_username)
+                                            : std::nullopt;
+                if (!role || !domain::role_satisfies(*role, domain::Role::Write)) {
+                    return transport::plain_text_response(403, "Forbidden", "write access is required\n");
                 }
             } else {
-                storage::AuthStore new_repo_auth_store(data_root);
-                authenticated_username = authenticate(request, new_repo_auth_store);
+                authenticated_username = authenticate(request, auth_store);
             }
             registry.ensure_exists(repo_name); // "push to create", the common hosting convention
 
@@ -315,6 +321,12 @@ void wire_routes(
             const storage::RepositoryConfig config = storage::load_config(registry.forge_dir_for(repo_name));
             storage::ObjectStore objects(config.storage_root);
             storage::RefStore refs(registry.forge_dir_for(repo_name));
+            // Captured before update_branch below mutates it: "no
+            // branches yet" is the actual "this repo has no history at
+            // all" signal the bootstrap-admin grant needs (see below) —
+            // registry.exists()/directory presence isn't it, for the
+            // same reason noted above.
+            const bool repo_had_no_branches_yet = refs.list_branches().empty();
 
             if (!objects.contains(push->new_commit)) {
                 return transport::plain_text_response(
@@ -356,12 +368,12 @@ void wire_routes(
                     409, "Conflict", "ref changed concurrently; fetch and try again\n");
             }
 
-            if (!repo_existed_already && authenticated_username) {
+            if (repo_had_no_branches_yet && authenticated_username) {
                 // Bootstrap: whoever authenticated for the push that
-                // created this repository becomes its Admin — otherwise
-                // no one could ever pass the Admin check POST
-                // /permissions needs to grant anyone else access.
-                storage::AuthStore auth_store(data_root);
+                // created this repository's first branch becomes its
+                // Admin — otherwise no one could ever pass the Admin
+                // check POST /permissions needs to grant anyone else
+                // access.
                 auth_store.set_permission(repo_name, *authenticated_username, domain::Role::Admin, now_unix());
             }
 

@@ -51,6 +51,7 @@ add_library(forge_core STATIC
   src/storage/ref_store.cpp
   src/storage/repo_lock.cpp
   src/storage/auth_store.cpp
+  src/storage/credential_store.cpp
   src/transport/socket_compat.cpp
   src/transport/http_message.cpp
   src/transport/http_parser.cpp

@@ -10,7 +10,7 @@ namespace forge::cli {
 
 enum class Command {
     Help, Version, Init, Add, Commit, Log, Branch, Switch, Checkout, Status, Diff, Merge, Completion, Verify,
-    Clone, Fetch, Push, Backup, Restore, Unknown
+    Clone, Fetch, Push, Backup, Restore, Login, Logout, Unknown
 };
 
 struct ParseResult {
@@ -64,6 +64,16 @@ struct ParseResult {
     // Populated only when command == Restore; both empty is a usage error.
     std::string restore_source;
     std::string restore_target;
+    // Populated only when command == Login; empty is a usage error.
+    std::string login_url;
+    // Populated only when command == Login; empty is a usage error.
+    std::string login_username;
+    // Populated only when command == Login; empty means "prompt for it"
+    // (run() reads it from stdin, masked where the platform supports
+    // that — see cli.cpp's read_password_masked).
+    std::string login_password;
+    // Populated only when command == Logout; empty is a usage error.
+    std::string logout_url;
 };
 
 // Pure and side-effect free so it is easy to unit test independently of
